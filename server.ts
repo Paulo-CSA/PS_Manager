@@ -35,22 +35,36 @@ async function writeDb(data: any) {
 }
 
 import { exec } from 'child_process';
-import * as iconv from 'iconv-lite';
+import iconv from 'iconv-lite';
 
 // Helper customizado para lidar com encoding CP850 (Windows)
 async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, stderr: string }> {
   return new Promise((resolve, reject) => {
-    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 2 * 1024 * 1024 }, (error: any, stdout, stderr) => {
-      // Usamos CP850 para suportar acentos do CMD brasileiro
-      const outStr = iconv.decode(stdout as Buffer, 'cp850');
-      const errStr = iconv.decode(stderr as Buffer, 'cp850');
-      
-      if (error) {
-        error.stdout = outStr;
-        error.stderr = errStr;
-        return reject(error);
+    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 5 * 1024 * 1024 }, (error: any, stdout, stderr) => {
+      // Tentamos decodificar. No Windows nativo, CP850 é comum. 
+      // Mas se o output já vier em UTF-8 (comum em alguns setups de PS), pode dar zica.
+      // Por enquanto, mantemos CP850 conforme pedido anterior para resolver acentos brasileiros no CMD.
+      try {
+        const outStr = iconv.decode(stdout as Buffer, 'cp850');
+        const errStr = iconv.decode(stderr as Buffer, 'cp850');
+        
+        if (error) {
+          error.stdout = outStr;
+          error.stderr = errStr;
+          return reject(error);
+        }
+        resolve({ stdout: outStr, stderr: errStr });
+      } catch (e) {
+        // Fallback para string simples se o iconv falhar por algum motivo bizarro
+        const outStr = (stdout as Buffer).toString('utf-8');
+        const errStr = (stderr as Buffer).toString('utf-8');
+        if (error) {
+          error.stdout = outStr;
+          error.stderr = errStr;
+          return reject(error);
+        }
+        resolve({ stdout: outStr, stderr: errStr });
       }
-      resolve({ stdout: outStr, stderr: errStr });
     });
   });
 }
@@ -290,12 +304,15 @@ async function startServer() {
 
   // Helper para limpar logs de header de ferramentas como PsExec
   function cleanOutput(raw: string): string {
+    if (!raw) return '';
+
     const bannerKeywords = [
       'PsExec v',
-      'Sysinternals - www.sysinternals.com',
+      'Sysinternals',
       'Copyright (C)',
-      'Starting PsExec service on',
-      'Connecting with PsExec service on',
+      'www.sysinternals.com',
+      'Starting PsExec service',
+      'Connecting with PsExec service',
       'PsExec service on',
       'Connecting to',
       'Starting cmd on',
@@ -314,18 +331,22 @@ async function startServer() {
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
 
       // Banner filtering
-      // Só removemos se a linha PARECER um banner, não se contiver apenas a palavra
-      // Se a linha for idêntica a um keyword ou começar com ele (comum para headers)
-      // Mas permitimos se a linha tiver dados úteis e apenas contiver a palavra (raro em banners)
+      // Removemos se a linha começa com um keyword de banner ou é o banner em si
       const isBanner = bannerKeywords.some(kw => {
         const lowerL = l.toLowerCase();
         const lowerKw = kw.toLowerCase();
-        // Se a linha começa com o banner (PsExec v, Connecting to...)
+        
+        // Se a linha começa com o banner técnico do psexec
         if (lowerL.startsWith(lowerKw)) return true;
-        // Se a linha contém Copyright ou Sysinternals (geralmente banners inteiros)
+        
+        // Se a linha contém copyright ou sysinternals (assinatura das ferramentas)
         if (lowerKw.includes('copyright') || lowerKw.includes('sysinternals')) {
             if (lowerL.includes(lowerKw)) return true;
         }
+
+        // Casos específicos de mensagens de status que podem aparecer no meio
+        if (lowerL.includes('with error code') && lowerL.includes('exited on')) return true;
+
         return false;
       });
 
@@ -334,7 +355,16 @@ async function startServer() {
       return true;
     });
 
-    return filtered.join('\n').trim();
+    const result = filtered.join('\n').trim();
+    
+    // Se removemos TUDO, mas o raw tinha muitas linhas, talvez a limpeza tenha sido agressiva demais.
+    // Nesse caso, retornamos o raw (limpo de espaços) para o usuário não ficar no escuro.
+    if (!result && raw.trim().length > 0) {
+        // Retornamos o raw mas sem as linhas idênticas a banners óbvios para pelo menos diminuir o ruído
+        return raw.trim().split('\n').filter(l => !l.includes('PsExec v') && !l.includes('Copyright')).join('\n').trim();
+    }
+
+    return result;
   }
 
   // Vite integration
