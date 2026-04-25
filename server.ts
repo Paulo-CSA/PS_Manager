@@ -133,41 +133,39 @@ async function startServer() {
 
             for (const base of possibleCmds) {
               try {
-                // O psexec.py as vezes prefere '/' em vez de '\' para domínio/usuário no Linux
-                // E precisamos garantir que as aspas não quebrem o shell
-                const safeCreds = `${username}:${password}@${host}`;
-                const fullCmd = `${base} ${safeCreds} ${command}`;
+                // Quotes around credentials to handle slashes/special chars
+                const fullCmd = `${base} "${username}:${password}@${host}" ${command}`;
                 
-                console.log(`[DEBUG] Tentando: ${fullCmd}`);
+                console.log(`[EXEC] ${fullCmd}`);
 
                 const { stdout, stderr } = await execAsync(fullCmd, { 
                   timeout: 60000,
                   maxBuffer: 1024 * 1024 
                 });
                 
-                let rawOutput = stdout || stderr || '';
-                
-                // Filtra o output para remover banners e logs do Impacket
-                const cleanOutput = rawOutput.split('\n').filter(line => {
-                  const l = line.trim();
-                  if (!l) return false;
-                  if (l.startsWith('Impacket v')) return false;
-                  if (l.startsWith('[*]')) return false;
-                  if (l.startsWith('[+]')) return false;
-                  if (l.startsWith('Configuring service...')) return false;
-                  return true;
-                }).join('\n').trim();
-
-                output = cleanOutput || 'Executado com sucesso.';
+                const rawOutput = (stdout || '') + (stderr || '');
+                output = cleanImpacketOutput(rawOutput) || 'Executado com sucesso.';
                 success = true;
                 break;
               } catch (err: any) {
                 lastError = err;
-                console.error(`Falha ao tentar ${base}:`, err.stderr || err.message);
                 
+                // Se psexec retornou erro mas tem output (ou erro de pipes), tentamos ler o que veio
+                const rawOutput = (err.stdout || '') + (err.stderr || '');
+                const cleaned = cleanImpacketOutput(rawOutput);
+                
+                // Se temos algum conteúdo útil (mesmo com erro de pipe), consideramos "sucesso parcial"
+                if (cleaned && !cleaned.includes('Something wen\'t wrong connecting the pipes')) {
+                   output = cleaned;
+                   success = true;
+                   break;
+                }
+
                 if (err.message.includes('not found')) {
                    continue;
                 }
+                
+                console.error(`Falha ao tentar ${base}:`, err.stderr || err.message);
                 break;
               }
             }
@@ -176,7 +174,7 @@ async function startServer() {
               return { host, status: 'success', output };
             } else {
               // Retorna o stderr detalhado para que o usuário saiba por que o psexec falhou
-              const detailedError = lastError?.stderr || lastError?.message || 'Erro desconhecido';
+              const detailedError = cleanImpacketOutput(lastError?.stderr || lastError?.message || 'Erro desconhecido');
               return { 
                 host, 
                 status: 'failed', 
@@ -198,6 +196,21 @@ async function startServer() {
       res.status(500).json({ error: 'Erro interno no servidor' });
     }
   });
+
+  // Helper para limpar logs do Impacket
+  function cleanImpacketOutput(raw: string): string {
+    return raw.split('\n').filter(line => {
+      const l = line.trim();
+      if (!l) return false;
+      if (l.startsWith('Impacket v')) return false;
+      if (l.startsWith('[*]')) return false;
+      if (l.startsWith('[+]')) return false;
+      if (l.startsWith('[-] Something wen\'t wrong')) return false;
+      if (l.startsWith('[!] Press help')) return false;
+      if (l.startsWith('Configuring service...')) return false;
+      return true;
+    }).join('\n').trim();
+  }
 
   // Vite integration
   console.log('Iniciando middleware do Vite...');
