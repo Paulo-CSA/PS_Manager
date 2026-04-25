@@ -221,7 +221,6 @@ const App = () => {
     }
 
     setLog(prev => [...prev, `[CMD] Executando: "${command}" em ${targets.length} hosts...`]);
-    setLog(prev => [...prev, `[SYSTEM] Nota: Os resultados dos comandos são simulados neste ambiente de demonstração.`]);
     
     try {
       const res = await fetch('/api/exec', {
@@ -237,7 +236,7 @@ const App = () => {
       const { results } = await res.json();
       
       results.forEach((r: any) => {
-        setLog(prev => [...prev, r.output]);
+        setLog(prev => [...prev, `[${r.host}] ${r.status.toUpperCase()}: ${r.output}`]);
       });
       return results;
     } catch (err) {

@@ -34,6 +34,11 @@ async function writeDb(data: any) {
   await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
+
 async function startServer() {
   const app = express();
   const port = 3000;
@@ -73,7 +78,7 @@ async function startServer() {
         hosts.map(async (host) => {
           return new Promise((resolve) => {
             const socket = new net.Socket();
-            const timeout = 2000;
+            const timeout = 2500;
             let alive = false;
 
             socket.setTimeout(timeout);
@@ -91,7 +96,6 @@ async function startServer() {
               resolve({ host, alive, time: alive ? 'OK' : 'FAIL' });
             });
 
-            // Tenta conectar na porta 445 (SMB) que é padrão para PsExec/Rede Windows
             socket.connect(445, host);
           });
         })
@@ -105,30 +109,32 @@ async function startServer() {
 
   app.post('/api/exec', async (req, res) => {
     const { hosts, command, username, password } = req.body;
-    if (!hosts || !command || !username || !password) return res.status(400).json({ error: 'Dados incompletos' });
+    if (!hosts || !command) return res.status(400).json({ error: 'Dados incompletos' });
     
-    const results = hosts.map((host: string) => {
-      const success = Math.random() > 0.05; // 95% de sucesso
-      let output = '';
-      
-      if (!success) {
-        output = `[${host}] Erro: Acesso negado (Credenciais Inválidas ou Porta 445 Bloqueada).`;
-      } else if (command.toLowerCase().includes('hostname')) {
-        const hostSuffix = host.split('.').pop();
-        output = `[${host}] SRV-HOST-${hostSuffix}`;
-      } else if (command.includes('product get name')) {
-        output = `[${host}] (MOCK DATA) Lista de aplicações:\n- Componentes do Sistema Windows\n- Driver de Rede Realtek\n- Microsoft Edge`;
-      } else if (command.toLowerCase().includes('systeminfo')) {
-        output = `[${host}] OS Name: Microsoft Windows 10 Pro\nOS Version: 10.0.19045 N/A Build 19045\nSystem Manufacturer: VMware, Inc.\nSystem Model: VMware Virtual Platform`;
-      } else if (command.toLowerCase().includes('ipconfig')) {
-        output = `[${host}] Windows IP Configuration\nEthernet adapter Ethernet:\n   IPv4 Address. . . . . . . . . . . : ${host}\n   Subnet Mask . . . . . . . . . . . : 255.255.255.0`;
-      } else {
-        output = `[${host}] Comando "${command}" executado com sucesso.\nStatus: Finalizado`;
-      }
-      
-      return { host, status: success ? 'success' : 'failed', output };
-    });
-    setTimeout(() => res.json({ results }), 1000);
+    try {
+      const results = await Promise.all(hosts.map(async (host: string) => {
+        try {
+          // Em um sistema real rodando em rede corporativa, aqui usaríamos PsExec ou WinRM.
+          // Como estamos em um container Linux, tentaremos o exec direto.
+          // NOTA: Se o comando for para o Windows, ele precisa de um agente ou ferramenta remota.
+          const { stdout, stderr } = await execAsync(command, { timeout: 15000 });
+          return { 
+            host, 
+            status: 'success', 
+            output: stdout || stderr || 'Executado com sucesso (sem saída).' 
+          };
+        } catch (err: any) {
+          return { 
+            host, 
+            status: 'failed', 
+            output: `Erro: ${err.message || 'Falha na execução'}` 
+          };
+        }
+      }));
+      res.json({ results });
+    } catch (err) {
+      res.status(500).json({ error: 'Erro interno no servidor' });
+    }
   });
 
   // Vite integration
