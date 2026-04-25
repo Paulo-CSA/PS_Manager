@@ -40,8 +40,8 @@ import iconv from 'iconv-lite';
 // Helper customizado para lidar com encoding CP850 (Windows)
 async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, stderr: string }> {
   return new Promise((resolve, reject) => {
-    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 2 * 1024 * 1024 }, (error: any, stdout, stderr) => {
-      // Usamos CP850 para suportar acentos do CMD brasileiro
+    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 1024 * 1024 * 5 }, (error: any, stdout, stderr) => {
+      // Decode using CP850 (DOS Latin 1), common in Brazilian Windows
       const outStr = iconv.decode(stdout as Buffer, 'cp850');
       const errStr = iconv.decode(stderr as Buffer, 'cp850');
       

@@ -356,15 +356,7 @@ const App = () => {
     if (results && results[0]) {
       const apps = results[0].output.split('\n')
         .map((a: string) => a.trim())
-        .filter((a: string) => 
-          a.length > 2 && 
-          !a.includes('----') &&
-          !a.startsWith('Name') &&
-          !a.startsWith('Success') &&
-          // Remove apenas linhas que são INTEGRALMENTE banners ou status do PsExec
-          !/^(PsExec v|Copyright|Sysinternals|Connecting|Starting|Copying|.*exited on.*error)/i.test(a) &&
-          !a.toLowerCase().includes('mark russinovich')
-        );
+        .filter((a: string) => a.length > 0);
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
     }
