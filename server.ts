@@ -40,31 +40,17 @@ import iconv from 'iconv-lite';
 // Helper customizado para lidar com encoding CP850 (Windows)
 async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, stderr: string }> {
   return new Promise((resolve, reject) => {
-    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 5 * 1024 * 1024 }, (error: any, stdout, stderr) => {
-      // Tentamos decodificar. No Windows nativo, CP850 é comum. 
-      // Mas se o output já vier em UTF-8 (comum em alguns setups de PS), pode dar zica.
-      // Por enquanto, mantemos CP850 conforme pedido anterior para resolver acentos brasileiros no CMD.
-      try {
-        const outStr = iconv.decode(stdout as Buffer, 'cp850');
-        const errStr = iconv.decode(stderr as Buffer, 'cp850');
-        
-        if (error) {
-          error.stdout = outStr;
-          error.stderr = errStr;
-          return reject(error);
-        }
-        resolve({ stdout: outStr, stderr: errStr });
-      } catch (e) {
-        // Fallback para string simples se o iconv falhar por algum motivo bizarro
-        const outStr = (stdout as Buffer).toString('utf-8');
-        const errStr = (stderr as Buffer).toString('utf-8');
-        if (error) {
-          error.stdout = outStr;
-          error.stderr = errStr;
-          return reject(error);
-        }
-        resolve({ stdout: outStr, stderr: errStr });
+    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 2 * 1024 * 1024 }, (error: any, stdout, stderr) => {
+      // Usamos CP850 para suportar acentos do CMD brasileiro
+      const outStr = iconv.decode(stdout as Buffer, 'cp850');
+      const errStr = iconv.decode(stderr as Buffer, 'cp850');
+      
+      if (error) {
+        error.stdout = outStr;
+        error.stderr = errStr;
+        return reject(error);
       }
+      resolve({ stdout: outStr, stderr: errStr });
     });
   });
 }
@@ -193,23 +179,42 @@ async function startServer() {
       return res.status(404).json({ error: 'Script não encontrado no servidor' });
     }
 
+    // Criamos uma cópia temporária do script para injetar o comando de autodeleção
+    const tempScriptName = `tmp_${Date.now()}_${scriptName}`;
+    const tempScriptPath = path.join(SCRIPTS_DIR, tempScriptName);
+
     try {
       const { username, password } = creds;
       
+      // Lemos o conteúdo original e injetamos o comando de auto-exclusão do Windows Batch
+      // O comando (goto) 2>nul & del "%~f0" é um truque clássico para um .bat se deletar
+      const originalContent = fs.readFileSync(scriptPath, 'utf-8');
+      const modifiedContent = originalContent + '\r\n\r\nREM Auto-cleanup\r\n(goto) 2>nul & del "%~f0"\r\n';
+      fs.writeFileSync(tempScriptPath, modifiedContent);
+
       // No Windows nativo, psexec -c lida com o upload e execução em um passo só
-      // Adicionamos -f para forçar o backup/copy se já existir e -i se puder ser interativo
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${scriptPath}"`;
+      // Adicionamos -f para forçar o backup/copy se já existir
+      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${tempScriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
       const { stdout, stderr } = await execWin(runCmd, 120000);
       
       const rawOutput = (stdout || '') + (stderr || '');
       const output = cleanOutput(rawOutput);
-      res.json({ output: output || 'Script executado com sucesso.' });
+      res.json({ output: output || 'Script executado com sucesso e removido da máquina de destino.' });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       const cleaned = cleanOutput(rawError);
       res.status(500).json({ error: cleaned || rawError || 'Erro ao executar script' });
+    } finally {
+      // Cleanup do arquivo temporário no servidor
+      try {
+        if (fs.existsSync(tempScriptPath)) {
+          fs.unlinkSync(tempScriptPath);
+        }
+      } catch (cleanupErr) {
+        console.error('Erro ao limpar script temporário local:', cleanupErr);
+      }
     }
   });
 
@@ -304,15 +309,12 @@ async function startServer() {
 
   // Helper para limpar logs de header de ferramentas como PsExec
   function cleanOutput(raw: string): string {
-    if (!raw) return '';
-
     const bannerKeywords = [
       'PsExec v',
-      'Sysinternals',
+      'Sysinternals - www.sysinternals.com',
       'Copyright (C)',
-      'www.sysinternals.com',
-      'Starting PsExec service',
-      'Connecting with PsExec service',
+      'Starting PsExec service on',
+      'Connecting with PsExec service on',
       'PsExec service on',
       'Connecting to',
       'Starting cmd on',
@@ -331,22 +333,18 @@ async function startServer() {
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
 
       // Banner filtering
-      // Removemos se a linha começa com um keyword de banner ou é o banner em si
+      // Só removemos se a linha PARECER um banner, não se contiver apenas a palavra
+      // Se a linha for idêntica a um keyword ou começar com ele (comum para headers)
+      // Mas permitimos se a linha tiver dados úteis e apenas contiver a palavra (raro em banners)
       const isBanner = bannerKeywords.some(kw => {
         const lowerL = l.toLowerCase();
         const lowerKw = kw.toLowerCase();
-        
-        // Se a linha começa com o banner técnico do psexec
+        // Se a linha começa com o banner (PsExec v, Connecting to...)
         if (lowerL.startsWith(lowerKw)) return true;
-        
-        // Se a linha contém copyright ou sysinternals (assinatura das ferramentas)
+        // Se a linha contém Copyright ou Sysinternals (geralmente banners inteiros)
         if (lowerKw.includes('copyright') || lowerKw.includes('sysinternals')) {
             if (lowerL.includes(lowerKw)) return true;
         }
-
-        // Casos específicos de mensagens de status que podem aparecer no meio
-        if (lowerL.includes('with error code') && lowerL.includes('exited on')) return true;
-
         return false;
       });
 
@@ -355,16 +353,7 @@ async function startServer() {
       return true;
     });
 
-    const result = filtered.join('\n').trim();
-    
-    // Se removemos TUDO, mas o raw tinha muitas linhas, talvez a limpeza tenha sido agressiva demais.
-    // Nesse caso, retornamos o raw (limpo de espaços) para o usuário não ficar no escuro.
-    if (!result && raw.trim().length > 0) {
-        // Retornamos o raw mas sem as linhas idênticas a banners óbvios para pelo menos diminuir o ruído
-        return raw.trim().split('\n').filter(l => !l.includes('PsExec v') && !l.includes('Copyright')).join('\n').trim();
-    }
-
-    return result;
+    return filtered.join('\n').trim();
   }
 
   // Vite integration
