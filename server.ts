@@ -309,9 +309,27 @@ async function startServer() {
   function cleanOutput(raw: string): string {
     if (!raw) return '';
     
-    // Remove caracteres nulos (\0) que podem quebrar o JSON/Browser
-    // e normaliza quebras de linha para exibição uniforme
-    return raw.replace(/\0/g, '').replace(/\r/g, '\n').trim();
+    // 1. Remove caracteres nulos (\0)
+    let cleaned = raw.replace(/\0/g, '');
+
+    // 2. PsExec costuma grudar mensagens de status. 
+    // Vamos forçar uma quebra de linha antes de palavras-chave conhecidas do PsExec
+    // para que o filtro de linha não apague o resultado do comando que está na mesma linha.
+    const keywordsToSeparate = [
+      'Connecting to',
+      'Starting',
+      'Copying',
+      'PsExec',
+      'exited on'
+    ];
+
+    keywordsToSeparate.forEach(kw => {
+      const regex = new RegExp(`([^\\n])(${kw})`, 'g');
+      cleaned = cleaned.replace(regex, '$1\n$2');
+    });
+
+    // 3. Normaliza quebras de linha Windows/Unix
+    return cleaned.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
   }
 
   // Vite integration
