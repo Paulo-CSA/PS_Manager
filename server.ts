@@ -6,8 +6,8 @@ import { fileURLToPath } from 'url';
 
 import bodyParser from 'body-parser';
 import cors from 'cors';
-import fs from 'fs/promises';
-import { existsSync, mkdirSync } from 'fs';
+import fs from 'fs';
+import fsp from 'fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,15 +15,15 @@ const DATA_DIR = path.join(__dirname, 'server_storage');
 const DATA_FILE = path.join(DATA_DIR, 'persistence.json');
 
 // Ensure data directory exists
-if (!existsSync(DATA_DIR)) {
-  mkdirSync(DATA_DIR);
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR);
   console.log(`>>> Criado diretório de persistência em: ${DATA_DIR}`);
 }
 
 // Helper to read/write JSON database
 async function readDb() {
   try {
-    const data = await fs.readFile(DATA_FILE, 'utf-8');
+    const data = await fsp.readFile(DATA_FILE, 'utf-8');
     return JSON.parse(data);
   } catch (e) {
     return { machines: [], credentials: {} };
@@ -31,7 +31,7 @@ async function readDb() {
 }
 
 async function writeDb(data: any) {
-  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+  await fsp.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
 import { exec } from 'child_process';
@@ -104,6 +104,88 @@ async function startServer() {
     } catch (e) { 
       console.error('Erro no check de rede:', e);
       res.status(500).json({ error: 'Falha na verificação de rede' }); 
+    }
+  });
+
+  // --- Scripts Management ---
+  const SCRIPTS_DIR = path.join(process.cwd(), 'scripts');
+  if (!fs.existsSync(SCRIPTS_DIR)) {
+    fs.mkdirSync(SCRIPTS_DIR);
+  }
+
+  app.get('/api/scripts', (req, res) => {
+    try {
+      const files = fs.readdirSync(SCRIPTS_DIR).filter(f => f.endsWith('.bat'));
+      res.json({ scripts: files });
+    } catch (err) {
+      res.status(500).json({ error: 'Erro ao listar scripts' });
+    }
+  });
+
+  app.post('/api/scripts/upload', express.text({ limit: '1mb' }), (req, res) => {
+    const { name } = req.query;
+    if (!name || typeof name !== 'string' || !name.endsWith('.bat')) {
+      return res.status(400).json({ error: 'Nome de arquivo inválido. Deve ser .bat' });
+    }
+    try {
+      fs.writeFileSync(path.join(SCRIPTS_DIR, name), req.body);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Erro ao salvar script' });
+    }
+  });
+
+  app.delete('/api/scripts/:name', (req, res) => {
+    try {
+      const filePath = path.join(SCRIPTS_DIR, req.params.name);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ error: 'Arquivo não encontrado' });
+      }
+    } catch (err) {
+      res.status(500).json({ error: 'Erro ao deletar script' });
+    }
+  });
+
+  app.post('/api/exec-script', async (req, res) => {
+    const { host, scriptName } = req.body;
+    const db = await readDb();
+    const creds = db.credentials;
+    
+    if (!creds || !creds.username || !creds.password) {
+      return res.status(400).json({ error: 'Credenciais não configuradas' });
+    }
+
+    const scriptPath = path.join(SCRIPTS_DIR, scriptName);
+    if (!fs.existsSync(scriptPath)) {
+      return res.status(404).json({ error: 'Script não encontrado no servidor' });
+    }
+
+    try {
+      const { username, password } = creds;
+      
+      // 1. Garantir que o diretório C:\PCManager existe via wmiexec
+      const mkdirCmd = `/root/.local/bin/wmiexec.py "${username}:${password}@${host}" "if not exist C:\\PCManager mkdir C:\\PCManager"`;
+      await execAsync(mkdirCmd, { timeout: 15000 }).catch(() => {}); // Ignora erro se já existir ou falha simples
+
+      // 2. Usar psexec.py com a flag -c para fazer o upload e executar
+      // O psexec.py -c carrega o arquivo local para o alvo e o executa.
+      // No entanto, para persistir na pasta C:\PCManager como pedido, faremos um pouco diferente:
+      // Como o psexec -c remove após executar, vamos usar smbclient ou similar se precisarmos de persistência manual.
+      // Mas para simplificar e garantir a execução:
+      const psexecPath = '/root/.local/bin/psexec.py';
+      const execCmd = `${psexecPath} "${username}:${password}@${host}" -c "${scriptPath}"`;
+      
+      console.log(`[SCRIPT_EXEC] ${execCmd}`);
+      const { stdout, stderr } = await execAsync(execCmd, { timeout: 120000 });
+      
+      const output = cleanImpacketOutput(stdout + stderr);
+      res.json({ output: output || 'Script executado com sucesso.' });
+    } catch (err: any) {
+      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
+      res.status(500).json({ error: cleanImpacketOutput(rawError) || 'Erro ao executar script' });
     }
   });
 

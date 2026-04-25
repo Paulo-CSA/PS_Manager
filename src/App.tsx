@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Monitor, Settings, Plus, Trash2, Play, Activity, 
   Shield, Terminal, Cpu, CheckCircle, XCircle, RefreshCw,
-  LogOut, ChevronRight, Globe, Lock, Key
+  LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -45,6 +45,12 @@ const App = () => {
   const [isAppModalOpen, setIsAppModalOpen] = useState(false);
   const [isWaitModalOpen, setIsWaitModalOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const [isScriptManagerOpen, setIsScriptManagerOpen] = useState(false);
+  const [isRunScriptModalOpen, setIsRunScriptModalOpen] = useState(false);
+  const [scripts, setScripts] = useState<string[]>([]);
+  const [scriptToRun, setScriptToRun] = useState<string | null>(null);
+  const [scriptTargetHosts, setScriptTargetHosts] = useState<string[]>([]);
+  
   const [terminalHost, setTerminalHost] = useState<string | null>(null);
   const [terminalLog, setTerminalLog] = useState<{ type: 'in' | 'out', text: string }[]>([]);
   const [terminalLoading, setTerminalLoading] = useState(false);
@@ -87,6 +93,74 @@ const App = () => {
         setLoading(false);
       });
   }, []);
+
+  const fetchScripts = async () => {
+    try {
+      const res = await fetch('/api/scripts');
+      const data = await res.json();
+      if (data.scripts) setScripts(data.scripts);
+    } catch (err) {
+      console.error('Erro ao buscar scripts');
+    }
+  };
+
+  useEffect(() => {
+    fetchScripts();
+  }, []);
+
+  const uploadScript = async (name: string, content: string) => {
+    if (!name.endsWith('.bat')) name += '.bat';
+    try {
+      const res = await fetch(`/api/scripts/upload?name=${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: content
+      });
+      if (res.ok) {
+        setLog(prev => [...prev, `[SCRIPT] Script ${name} enviado com sucesso.`]);
+        fetchScripts();
+      }
+    } catch (err) {
+      setLog(prev => [...prev, `[ERROR] Erro ao enviar script.`]);
+    }
+  };
+
+  const deleteScript = async (name: string) => {
+    try {
+      const res = await fetch(`/api/scripts/${name}`, { method: 'DELETE' });
+      if (res.ok) {
+        setLog(prev => [...prev, `[SCRIPT] Script ${name} removido.`]);
+        fetchScripts();
+      }
+    } catch (err) {
+      setLog(prev => [...prev, `[ERROR] Erro ao deletar script.`]);
+    }
+  };
+
+  const executeScriptOnHosts = async (scriptName: string, hosts: string[]) => {
+    setIsRunScriptModalOpen(false);
+    setIsWaitModalOpen(true);
+    
+    for (const host of hosts) {
+      setLog(prev => [...prev, `[SCRIPT] Executando ${scriptName} em ${host}...`]);
+      try {
+        const res = await fetch('/api/exec-script', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ host, scriptName })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setLog(prev => [...prev, `[${host}] SUCESSO: ${data.output}`]);
+        } else {
+          setLog(prev => [...prev, `[${host}] FALHA: ${data.error}`]);
+        }
+      } catch (err) {
+        setLog(prev => [...prev, `[${host}] ERRO DE REDE.`]);
+      }
+    }
+    setIsWaitModalOpen(false);
+  };
 
   // Save machines to Server whenever they change
   useEffect(() => {
@@ -421,6 +495,16 @@ const App = () => {
             <h3 className="text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-4">Ações Rápidas</h3>
             <div className="grid grid-cols-1 gap-2">
               <button 
+                onClick={() => setIsScriptManagerOpen(true)}
+                className="p-3 bg-[#1A1B1E] hover:bg-blue-600 hover:text-white border border-white/5 rounded-xl text-left text-xs transition-all group flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2">
+                  <ScrollText size={14} className="text-blue-500 group-hover:text-white" />
+                  <span>Gerenciar Scripts</span>
+                </div>
+                <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+              </button>
+              <button 
                 onClick={() => executeRemote('gpupdate /force')}
                 className="p-3 bg-[#1A1B1E] hover:bg-blue-600 hover:text-white border border-white/5 rounded-xl text-left text-xs transition-all group flex items-center justify-between"
               >
@@ -518,12 +602,26 @@ const App = () => {
                     )}
                   </div>
                 </div>
-                <button 
-                  onClick={() => setIsAddModalOpen(true)}
-                  className="px-4 py-2 bg-white text-black font-bold rounded-lg hover:bg-gray-200 transition-all flex items-center gap-2"
-                >
-                  <Plus size={18} /> Cadastrar Máquina
-                </button>
+                <div className="flex gap-2">
+                  {selectedHosts.length > 0 && (
+                    <button 
+                      onClick={() => {
+                        setScriptToRun(null);
+                        setScriptTargetHosts(selectedHosts);
+                        setIsRunScriptModalOpen(true);
+                      }}
+                      className="px-4 py-2 bg-emerald-600/10 text-emerald-500 border border-emerald-600/20 font-bold rounded-lg hover:bg-emerald-600 hover:text-white transition-all flex items-center gap-2"
+                    >
+                      <FileCode size={18} /> Scripts em Massa
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => setIsAddModalOpen(true)}
+                    className="px-4 py-2 bg-white text-black font-bold rounded-lg hover:bg-gray-200 transition-all flex items-center gap-2"
+                  >
+                    <Plus size={18} /> Cadastrar Máquina
+                  </button>
+                </div>
               </div>
 
               {/* Table */}
@@ -575,6 +673,18 @@ const App = () => {
                         {m.lastPing ? new Date(m.lastPing).toLocaleTimeString() : '---'}
                       </div>
                       <div className="col-span-2 flex justify-center gap-3 text-gray-600">
+                        <button 
+                          onClick={() => {
+                            setScriptToRun(null);
+                            setScriptTargetHosts([m.ip]);
+                            setIsRunScriptModalOpen(true);
+                          }}
+                          className="hover:text-emerald-500 transition-colors"
+                          title="Executar Script"
+                          disabled={m.status !== 'online'}
+                        >
+                          <FileCode size={16} className={m.status !== 'online' ? 'opacity-20' : ''} />
+                        </button>
                         <button 
                           onClick={() => openTerminal(m.ip)}
                           className="hover:text-amber-500 transition-colors"
@@ -970,6 +1080,157 @@ const App = () => {
                   className="flex-1 py-3 bg-blue-600 text-white rounded-xl text-sm font-bold transition-all"
                 >
                   Aplicar Configuração
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Scripts Manager Modal */}
+      <AnimatePresence>
+        {isScriptManagerOpen && (
+          <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[#151619] border border-white/10 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col"
+            >
+              <div className="px-8 py-6 border-b border-white/5 flex items-center justify-between bg-[#111113]">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-500/10 rounded-lg">
+                    <ScrollText className="text-blue-500" size={24} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">Repositório de Scripts</h3>
+                    <p className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">Apenas arquivos .bat são aceitos</p>
+                  </div>
+                </div>
+                <button onClick={() => setIsScriptManagerOpen(false)} className="p-2 hover:bg-white/5 rounded-full">
+                  <XCircle size={24} className="text-gray-500 hover:text-white" />
+                </button>
+              </div>
+
+              <div className="p-8 flex-1 overflow-y-auto space-y-6">
+                {/* Upload Section */}
+                <div className="p-6 bg-blue-600/5 border border-blue-600/20 rounded-2xl">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-blue-400 mb-4 flex items-center gap-2">
+                    <UploadCloud size={14} /> Novo Script
+                  </h4>
+                  <div className="flex gap-3">
+                    <input 
+                      type="text"
+                      id="new-script-name"
+                      placeholder="nome_do_script.bat"
+                      className="flex-1 bg-black border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-500 transition-all"
+                    />
+                    <button 
+                      onClick={() => {
+                        const nameEl = document.getElementById('new-script-name') as HTMLInputElement;
+                        const contentEl = document.getElementById('new-script-content') as HTMLTextAreaElement;
+                        if (nameEl.value && contentEl.value) {
+                          uploadScript(nameEl.value, contentEl.value);
+                          nameEl.value = '';
+                          contentEl.value = '';
+                        }
+                      }}
+                      className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm transition-all shadow-lg shadow-blue-900/20"
+                    >
+                      Salvar
+                    </button>
+                  </div>
+                  <textarea 
+                    id="new-script-content"
+                    placeholder="Cole o conteúdo do seu script aqui..."
+                    className="w-full h-32 mt-3 bg-black border border-white/10 rounded-xl px-4 py-3 text-xs font-mono outline-none focus:border-blue-500 transition-all resize-none"
+                  />
+                </div>
+
+                {/* List Section */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Scripts Disponíveis ({scripts.length})</h4>
+                  {scripts.length === 0 ? (
+                    <div className="text-center py-8 text-gray-600 italic text-sm">
+                      Nenhum script cadastrado no servidor.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-2">
+                      {scripts.map(s => (
+                        <div key={s} className="group p-4 bg-[#1A1B1E] border border-white/5 rounded-xl flex items-center justify-between hover:border-blue-500/30 transition-all">
+                          <div className="flex items-center gap-3">
+                            <FileCode size={20} className="text-blue-500" />
+                            <span className="text-sm font-mono text-gray-300">{s}</span>
+                          </div>
+                          <button 
+                            onClick={() => deleteScript(s)}
+                            className="p-2 text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Run Script Modal */}
+      <AnimatePresence>
+        {isRunScriptModalOpen && (
+          <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="bg-[#151619] border border-white/10 rounded-3xl w-full max-w-md p-8 shadow-2xl"
+            >
+              <h3 className="text-xl font-bold mb-2 flex items-center gap-2">
+                <Play className="text-emerald-500" /> Executar Script
+              </h3>
+              <p className="text-xs text-gray-500 mb-6">Executando em {scriptTargetHosts.length} hosts selecionados.</p>
+
+              <div className="space-y-4 mb-8">
+                <label className="block text-[10px] uppercase text-gray-500 font-bold mb-1">Selecione o Script</label>
+                <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                  {scripts.length === 0 ? (
+                    <div className="text-center p-4 border border-dashed border-white/10 rounded-xl text-gray-600 text-xs italic">
+                      Nenhum script disponível. Vá em Gerenciar Scripts.
+                    </div>
+                  ) : scripts.map(s => (
+                    <button 
+                      key={s}
+                      onClick={() => setScriptToRun(s)}
+                      className={`p-4 rounded-xl border text-left flex items-center justify-between transition-all ${
+                        scriptToRun === s 
+                          ? 'bg-blue-600/10 border-blue-500 text-white' 
+                          : 'bg-black/40 border-white/5 text-gray-400 hover:border-white/20'
+                      }`}
+                    >
+                      <span className="text-sm font-mono truncate">{s}</span>
+                      {scriptToRun === s && <CheckCircle size={16} className="text-blue-500" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setIsRunScriptModalOpen(false)}
+                  className="flex-1 py-3 bg-white/5 rounded-xl text-sm font-bold transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  disabled={!scriptToRun}
+                  onClick={() => scriptToRun && executeScriptOnHosts(scriptToRun, scriptTargetHosts)}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-emerald-900/20"
+                >
+                  Iniciar Execução
                 </button>
               </div>
             </motion.div>
