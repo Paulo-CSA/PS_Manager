@@ -114,42 +114,24 @@ async function startServer() {
     try {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
-          // Tentativa de execução Real
-          // Se o usuário providenciou autenticação, tentamos usar uma ferramenta de execução remota.
-          // Como o PsExec real é um binário Windows, no Linux usamos tipicamente o 'psexec.py' do Impacket.
+          let finalCmd = command;
           
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            // Comando para usar o impacket-psexec se estiver instalado
-            // Exemplo: psexec.py domain/user:password@host command
-            // NOTA: No ambiente Cloud Run, este binário não está presente por padrão.
-            // Aqui estamos preparando o comando que SERIA executado.
-            const remoteCmd = `psexec.py "${username}:${password}@${host}" "${command}"`;
-            
-            try {
-              // Tentamos rodar. Se o binário não existir, o erro dirá "command not found"
-              const { stdout, stderr } = await execAsync(remoteCmd, { timeout: 30000 });
-              return { host, status: 'success', output: stdout || stderr };
-            } catch (err: any) {
-              if (err.message.includes('not found')) {
-                return { 
-                  host, 
-                  status: 'error', 
-                  output: `[ERRO] A ferramenta 'psexec.py' (Impacket) não foi encontrada no servidor Linux.\n\nPara funcionar no ambiente Cloud:\n1. O servidor precisa ter o Impacket instalado.\n2. A porta 445 do host ${host} deve estar aberta para a internet (NÃO RECOMENDADO) ou via VPN.\n\nExecutando em modo de simulação local...` 
-                };
-              }
-              throw err;
-            }
+            // Usa psexec.py do Impacket para execução remota
+            finalCmd = `psexec.py "${username}:${password}@${host}" "${command}"`;
           }
 
-          // Fallback para execução local ou erro de configuração
-          const { stdout, stderr } = await execAsync(command, { timeout: 15000 });
-          return { host, status: 'success', output: stdout || stderr || 'OK' };
-          
+          const { stdout, stderr } = await execAsync(finalCmd, { timeout: 60000 });
+          return { 
+            host, 
+            status: 'success', 
+            output: stdout || stderr || 'Executado com sucesso.' 
+          };
         } catch (err: any) {
           return { 
             host, 
             status: 'failed', 
-            output: `Erro: ${err.message || 'Falha na execução'}` 
+            output: `Erro: ${err.stderr || err.stdout || err.message}` 
           };
         }
       }));
