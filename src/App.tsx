@@ -361,8 +361,9 @@ const App = () => {
           !a.includes('----') &&
           !a.startsWith('Name') &&
           !a.startsWith('Success') &&
-          // Filtro cirúrgico: remove apenas linhas que são EXCLUSIVAMENTE mensagens do PsExec
-          !/^(PsExec v|Copyright|Sysinternals|Connecting|Starting|Copying|.*exited on.*error)/i.test(a)
+          // Remove apenas linhas que são INTEGRALMENTE banners ou status do PsExec
+          !/^(PsExec v|Copyright|Sysinternals|Connecting|Starting|Copying|.*exited on.*error)/i.test(a) &&
+          !a.toLowerCase().includes('mark russinovich')
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
