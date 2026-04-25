@@ -357,11 +357,9 @@ const App = () => {
         .map((a: string) => a.trim())
         .filter((a: string) => 
           a && 
-          !a.includes('Name') && 
           !a.includes('----') &&
-          !a.includes('[') &&
           !a.startsWith('Success') &&
-          !a.includes('PsExec')
+          !a.toLowerCase().includes('psexec')
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
