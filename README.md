@@ -11,6 +11,7 @@ Node.js
 5. Instalar o node 
 
 6. npm install -g pm2
+7. npm install (dentro da pasta do projeto)
 
 Run the app: npm run dev
 
