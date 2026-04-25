@@ -348,7 +348,8 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    const results = await executeRemote(`powershell -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -ne $null } | Select-Object -ExpandProperty DisplayName"`, [host]);
+    // Comando PowerShell otimizado conforme sugestão do usuário
+    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName"`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
@@ -359,7 +360,8 @@ const App = () => {
           !a.includes('Name') && 
           !a.includes('----') &&
           !a.includes('[') &&
-          !a.startsWith('Success')
+          !a.startsWith('Success') &&
+          !a.includes('PsExec')
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
@@ -369,8 +371,8 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    // Comando via PowerShell para desinstalação via DisplayName (UninstallString)
-    const uninstallCmd = `powershell -Command "$app = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { Start-Process cmd.exe -ArgumentList '/c', $app.UninstallString, '/quiet', '/norestart' -Wait }"`;
+    // Comando via PowerShell otimizado
+    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace '/I', '/X'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
     await executeRemote(uninstallCmd, [host]);
     setIsAppModalOpen(false);
   };
