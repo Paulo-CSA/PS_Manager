@@ -84,11 +84,10 @@ async function startServer() {
   });
 
   // Vite integration
+  console.log('Iniciando middleware do Vite...');
   const vite = await createViteServer({
     server: { 
-      middlewareMode: true,
-      host: '0.0.0.0', // Ensure it allows external connections
-      port: 3000
+      middlewareMode: true
     },
     appType: 'spa',
   });
@@ -96,8 +95,10 @@ async function startServer() {
   app.use(vite.middlewares);
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`Server running at http://0.0.0.0:${port}`);
+    console.log(`>>> Servidor PS_MANAGER rodando em http://0.0.0.0:${port}`);
   });
 }
 
-startServer().catch(console.error);
+startServer().catch((err) => {
+  console.error('ERRO CRÍTICO AO INICIAR SERVIDOR:', err);
+});

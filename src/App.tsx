@@ -49,15 +49,21 @@ const App = () => {
 
   // Load data from Server
   useEffect(() => {
-    fetch('/api/data')
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    fetch('/api/data', { signal: controller.signal })
       .then(res => res.json())
       .then(db => {
+        clearTimeout(timeoutId);
         if (db.machines) setMachines(db.machines);
         if (db.credentials) setCreds(db.credentials);
         setLoading(false);
       })
       .catch(err => {
+        clearTimeout(timeoutId);
         console.error('Falha ao carregar dados do servidor', err);
+        setLog(prev => [...prev, '[SYSTEM] Erro ao conectar ao servidor. Usando cache local.']);
         setLoading(false);
       });
   }, []);
