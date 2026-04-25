@@ -13,6 +13,10 @@ Node.js
 6. npm install -g pm2
 7. npm install (dentro da pasta do projeto)
 
-Run the app: npm run dev
+netstat -ano | findstr :3000
+tasklist | findstr 1234
 
-mp2 install (opicional)
+Run the app: start /B npm run dev
+
+
+
