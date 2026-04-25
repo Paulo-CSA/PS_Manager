@@ -255,7 +255,8 @@ async function startServer() {
             const rawOutput = (stdout || '') + (stderr || '');
             const cleaned = cleanOutput(rawOutput);
             
-            return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
+            // Se o comando teve output real, usamos ele. Se foi vazio ou so tinha cabeçalho, enviamos a mensagem padrão.
+            return { host, status: 'success', output: cleaned || 'Executado com sucesso (sem retorno).' };
           } else {
             // Local fallback
             const { stdout, stderr } = await execAsync(command);
@@ -281,12 +282,10 @@ async function startServer() {
   // Helper para limpar logs de header de ferramentas como PsExec
   function cleanOutput(raw: string): string {
     const bannerKeywords = [
-      'PsExec v',
       'Sysinternals - www.sysinternals.com',
       'Copyright (C)',
       'Starting PsExec service on',
       'Connecting with PsExec service on',
-      'PsExec service on',
       'Connecting to',
       'Starting cmd on',
       'Copying authentication key to',
