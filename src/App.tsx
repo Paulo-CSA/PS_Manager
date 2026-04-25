@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Monitor, Settings, Plus, Trash2, Play, Activity, 
-  Shield, Terminal, Cpu, CheckCircle, XCircle, RefreshCw,
+  Shield, Terminal, Cpu, Check, X, RefreshCw,
   LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -77,23 +77,21 @@ const App = () => {
 
   // Load data from Server
   useEffect(() => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    fetch('/api/data', { signal: controller.signal })
-      .then(res => res.json())
-      .then(db => {
-        clearTimeout(timeoutId);
+    const loadData = async () => {
+      try {
+        const res = await fetch('/api/data');
+        if (!res.ok) throw new Error('Falha ao carregar dados');
+        const db = await res.json();
         if (db.machines) setMachines(db.machines);
         if (db.credentials) setCreds(db.credentials);
         setLoading(false);
-      })
-      .catch(err => {
-        clearTimeout(timeoutId);
+      } catch (err) {
         console.error('Falha ao carregar dados do servidor', err);
-        setLog(prev => [...prev, '[SYSTEM] Erro ao conectar ao servidor. Usando cache local.']);
+        setLog(prev => [...prev, '[SYSTEM] Erro ao conectar ao servidor. Verifique a rede.']);
         setLoading(false);
-      });
+      }
+    };
+    loadData();
   }, []);
 
   const fetchScripts = async () => {
@@ -372,10 +370,41 @@ const App = () => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
     
-    // Comando via PowerShell robusto com escape para shell Linux (\$ para evitar expansão indesejada)
-    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "\\$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { \\$_.DisplayName -like '${appName.trim()}*' } | Select-Object -First 1; if (\\$app) { \\$cmd = \\$app.QuietUninstallString; if (-not \\$cmd) { \\$cmd = \\$app.UninstallString }; Write-Output ('App encontrado: ' + \\$app.DisplayName); if (\\$cmd -match 'msiexec') { if (\\$cmd -match '{.*}') { \\$guid = \\$matches[0]; Start-Process msiexec.exe -ArgumentList '/x', \\$guid, '/quiet', '/norestart' -Wait } } elseif (\\$app.DisplayName -like '${appName.trim()}*') { Start-Process -FilePath \\$cmd -ArgumentList '/S' -Wait } else { \\$argsList = @('', '/quiet', '/S', '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'); foreach (\\$arg in \\$argsList) { try { Write-Output ('Tentando: ' + \\$cmd + ' ' + \\$arg); Start-Process -FilePath \\$cmd -ArgumentList \\$arg -Wait -ErrorAction Stop; break } catch {} } } }"`;
+    // Comando via PowerShell robusto com escape para shell Linux (\$ para evitar expansão indesejada no Node exec)
+    // Usamos um formato que minimiza o uso de aspas duplas externas
+    const psCommand = `
+\\$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { \\$_.DisplayName -like '${appName.trim()}*' } | Select-Object -First 1;
+if (\\$app) {
+    \\$cmd = \\$app.QuietUninstallString;
+    if (-not \\$cmd) { \\$cmd = \\$app.UninstallString };
+    Write-Output "App encontrado: \\$(\\$app.DisplayName)";
+    if (\\$cmd -match 'msiexec') {
+        if (\\$cmd -match '{.*}') {
+            \\$guid = \\$matches[0];
+            Start-Process msiexec.exe -ArgumentList '/x', \\$guid, '/quiet', '/norestart' -Wait;
+        }
+    } elseif (\\$app.DisplayName -like 'WinRAR*') {
+        Start-Process -FilePath \\$cmd -ArgumentList '/S' -Wait;
+    } else {
+        \\$argsList = @('', '/quiet', '/S', '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART');
+        foreach (\\$arg in \\$argsList) {
+            try {
+                Write-Output "Tentando: \\$cmd \\$arg";
+                Start-Process -FilePath \\$cmd -ArgumentList \\$arg -Wait -ErrorAction Stop;
+                break;
+            } catch {}
+        }
+    }
+} else {
+    Write-Output "Aplicativo não encontrado.";
+}
+`.trim().replace(/\n/g, ' ');
+
+    // Escapamos o comando para passar com segurança pelo console (Node exec /bin/sh)
+    // Para que as aspas internas sobrevivam e não quebrem o comando, usamos tripla barra para virar aspas escapadas
+    const fullCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCommand.replace(/"/g, '\\\"')}"`;
     
-    await executeRemote(uninstallCmd, [host]);
+    await executeRemote(fullCmd, [host]);
     setIsAppModalOpen(false);
   };
 
@@ -603,7 +632,7 @@ const App = () => {
                         onClick={() => setSearchQuery('')}
                         className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
                       >
-                        <XCircle size={14} />
+                        <X size={14} />
                       </button>
                     )}
                   </div>
@@ -805,7 +834,7 @@ const App = () => {
                       onClick={saveCreds}
                       className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl mt-2 hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
                     >
-                      <CheckCircle size={18} /> Salvar Parâmetros
+                      <Check size={18} /> Salvar Parâmetros
                     </button>
                   </div>
                 </div>
@@ -938,7 +967,7 @@ const App = () => {
                   }}
                   className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-500 hover:text-white"
                 >
-                  <XCircle size={20} />
+                  <X size={20} />
                 </button>
               </div>
               
@@ -1032,7 +1061,7 @@ const App = () => {
                   <Activity className="text-blue-500" /> Aplicativos Instalados
                 </h3>
                 <button onClick={() => setIsAppModalOpen(false)} className="text-gray-500 hover:text-white transition-colors">
-                  <XCircle size={24} />
+                  <X size={24} />
                 </button>
               </div>
               
@@ -1161,7 +1190,7 @@ const App = () => {
                   </div>
                 </div>
                 <button onClick={() => setIsScriptManagerOpen(false)} className="p-2 hover:bg-white/5 rounded-full">
-                  <XCircle size={24} className="text-gray-500 hover:text-white" />
+                  <X size={24} className="text-gray-500 hover:text-white" />
                 </button>
               </div>
 
@@ -1265,7 +1294,7 @@ const App = () => {
                       }`}
                     >
                       <span className="text-sm font-mono truncate">{s}</span>
-                      {scriptToRun === s && <CheckCircle size={16} className="text-blue-500" />}
+                      {scriptToRun === s && <Check size={16} className="text-blue-500" />}
                     </button>
                   ))}
                 </div>
@@ -1324,7 +1353,7 @@ const App = () => {
                     onClick={() => setIsTerminalOpen(false)}
                     className="p-2 hover:bg-white/5 rounded-full transition-all"
                   >
-                    <XCircle size={22} className="text-gray-500 hover:text-red-500" />
+                    <X size={22} className="text-gray-500 hover:text-red-500" />
                   </button>
                 </div>
               </div>
