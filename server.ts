@@ -312,42 +312,44 @@ async function startServer() {
     if (!raw) return '';
 
     const bannerKeywords = [
-      'PsExec v[0-9.]+',
+      'PsExec v',
       'Sysinternals - www.sysinternals.com',
-      'Copyright \\(C\\) [0-9-]+ Mark Russinovich',
-      'Starting [^ ]+(?: service)? on [0-9.]+',
-      'Connecting with PsExec service on [0-9.]+',
-      'PsExec service on [0-9.]+',
-      'Connecting to [0-9.]+',
-      'Starting [^ ]+ on [0-9.]+',
-      'Copying authentication key to [0-9.]+',
-      'exited on [0-9.]+ with error code [0-9]+',
-      'cmd exited on [0-9.]+',
-      'PsExec could not start [^ ]+ on [0-9.]+',
+      'Copyright (C)',
+      'Starting PsExec service on',
+      'Connecting with PsExec service on',
+      'PsExec service on',
+      'Connecting to',
+      'Starting',
+      'Copying authentication key to',
+      'exited on', 
+      'with error code',
+      'cmd exited on',
       'PSEXESVC'
     ];
 
-    // 1. Remove caracteres nulos e outros ruídos binários comuns em pipes do Windows
-    let cleaned = raw.replace(/\0/g, '');
+    // 1. Remove caracteres nulos
+    const sanitized = raw.replace(/\0/g, '');
 
-    // 2. Remove frases de banner específicas (mesmo que estejam no meio de texto ou coladas)
-    bannerKeywords.forEach(kw => {
-      // Usamos [\\s.]* para pegar os "..." no final e fazemos global/insensitive
-      // Adicionamos Word Boundary ou permitimos que pegue pedaços colados
-      const regex = new RegExp(kw + '[\\s.]*', 'gi');
-      cleaned = cleaned.replace(regex, '\n'); // Substitui por newline para garantir separação
-    });
-
-    // 3. Processamento por linha para remover prompts e linhas vazias
-    const lines = cleaned.split(/\r?\n/);
+    // 2. Processamento por linha
+    const lines = sanitized.split(/\r?\n/);
     const filtered = lines.filter(line => {
       const l = line.trim();
       if (!l) return false;
       
-      // Prompt removal (e.g., C:\> or C:\Windows\system32>)
+      // Prompt removal (ex: C:\> ou C:\Windows>)
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
-      
-      // Se a linha resultante for apenas ruído de shell
+
+      // Banner filtering: Só remove se a LINHA COMEÇAR com um keyword de banner
+      // Isso evita remover resultados legítimos que apenas contêm a palavra
+      const isBannerLine = bannerKeywords.some(kw => {
+        const lowerL = l.toLowerCase();
+        const lowerKw = kw.toLowerCase();
+        return lowerL.startsWith(lowerKw) || lowerL.includes('mark russinovich');
+      });
+
+      if (isBannerLine) return false;
+
+      // Remove ruídos de shell sozinhos na linha
       if (l.toLowerCase() === 'cmd' || l.toLowerCase() === 'powershell') return false;
       
       return true;
