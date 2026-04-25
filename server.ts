@@ -116,12 +116,12 @@ async function startServer() {
       return res.status(404).json({ error: 'Host não encontrado na base de dados' });
     }
 
-    const creds = db.credentials[host];
-    if (!creds || !creds.user || !creds.pass) {
-      return res.status(400).json({ error: 'Credenciais não configuradas para este host' });
+    const creds = db.credentials;
+    if (!creds || !creds.username || !creds.password) {
+      return res.status(400).json({ error: 'Credenciais globais não configuradas' });
     }
 
-    const { user: username, pass: password } = creds;
+    const { username, password } = creds;
 
     const wmiBase = '/root/.local/bin/wmiexec.py';
 
