@@ -159,13 +159,15 @@ async function startServer() {
           let finalCmd = command;
           
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            // Tenta psexec.py, impacket-psexec ou via python3 -m
-            // Para maior robustez, tentamos localizar o comando
+            // Prioritizing wmiexec.py as requested for better reliability
             const possibleCmds = [
+              `/root/.local/bin/wmiexec.py`,
+              `wmiexec.py`,
               `/root/.local/bin/psexec.py`,
               `psexec.py`,
               `impacket-psexec`,
               `/usr/local/bin/psexec.py`,
+              `python3 -m impacket.examples.wmiexec`,
               `python3 -m impacket.examples.psexec`
             ];
             
@@ -258,6 +260,8 @@ async function startServer() {
       if (l.startsWith('[-] Something wen\'t wrong')) return false;
       if (l.startsWith('[!] Press help')) return false;
       if (l.startsWith('Configuring service...')) return false;
+      // WMIExec specific prompt removal (e.g., C:\> or C:\Windows\system32>)
+      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
       return true;
     }).join('\n').trim();
   }
