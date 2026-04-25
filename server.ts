@@ -136,11 +136,7 @@ async function startServer() {
                 // O psexec.py as vezes prefere '/' em vez de '\' para domínio/usuário no Linux
                 // E precisamos garantir que as aspas não quebrem o shell
                 const safeCreds = `${username}:${password}@${host}`;
-                // Usar aspas simples ao redor do comando para evitar que o shell local expanda coisas do windows/powershell
-                // e para lidar com as aspas duplas internas que o powershell usa.
-                // Troca ' por '\'' (padrão de escape shell)
-                const shellEscapedCommand = command.replace(/'/g, "'\\''");
-                const fullCmd = `${base} "${safeCreds}" '${shellEscapedCommand}'`;
+                const fullCmd = `${base} ${safeCreds} ${command}`;
                 
                 console.log(`[DEBUG] Tentando: ${fullCmd}`);
 
