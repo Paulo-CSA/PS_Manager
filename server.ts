@@ -200,10 +200,17 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // No Windows, envolvemos o comando em aspas para o CMD
-      // Para comandos complexos (com pipes e aspas), o padrão cmd /c "comando" costuma ser o mais seguro
-      const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+      let fullCmd;
+      // Para comandos simples sem redirecionamento ou pipes, podemos chamar direto.
+      // Isso ajuda a evitar problemas de aspas extras do cmd /c.
+      const hasSpecialChars = /[&|<>^]/.test(command);
+      
+      if (!hasSpecialChars) {
+          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
+      } else {
+          const escapedCommand = command.replace(/"/g, '""');
+          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+      }
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
@@ -215,7 +222,7 @@ async function startServer() {
       const rawOutput = (stdout || '') + (stderr || '');
       const output = cleanOutput(rawOutput);
 
-      res.json({ output: output || 'Comando executado com sucesso (sem retorno).' });
+      res.json({ output: output || rawOutput || 'Comando executado com sucesso (sem retorno).' });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       const cleaned = cleanOutput(rawError);
@@ -231,8 +238,15 @@ async function startServer() {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            const escapedCommand = command.replace(/"/g, '""');
-            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+            let fullCmd;
+            const hasSpecialChars = /[&|<>^]/.test(command);
+            
+            if (!hasSpecialChars) {
+                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
+            } else {
+                const escapedCommand = command.replace(/"/g, '""');
+                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+            }
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
@@ -244,8 +258,8 @@ async function startServer() {
             const rawOutput = (stdout || '') + (stderr || '');
             const cleaned = cleanOutput(rawOutput);
             
-            // Se o comando teve output real, usamos ele. Se foi vazio ou so tinha cabeçalho, enviamos a mensagem padrão.
-            return { host, status: 'success', output: cleaned || 'Executado com sucesso (sem retorno).' };
+            // Se o comando teve output real, usamos ele. Se foi vazio ou so tinha cabeçalho, enviamos o raw ou mensagem padrão.
+            return { host, status: 'success', output: cleaned || rawOutput || 'Executado com sucesso (sem retorno).' };
           } else {
             // Local fallback
             const { stdout, stderr } = await execAsync(command);
@@ -276,25 +290,12 @@ async function startServer() {
       if (!l) return false;
       
       const lower = l.toLowerCase();
-      // Filtros exatos e de prefixo para banners do PsExec
-      if (lower.startsWith('psexec v')) return false;
-      if (lower.startsWith('sysinternals - www.sysinternals.com')) return false;
-      if (lower.startsWith('copyright (c)')) return false;
-      if (lower.startsWith('starting psexec service on')) return false;
-      if (lower.startsWith('connecting with psexec service on')) return false;
+      // Only filter out the most common PsExec service banners to keep output clean 
+      // but without risking the removal of actual command content.
+      if (lower.startsWith('starting psexec service')) return false;
+      if (lower.startsWith('connecting with psexec service')) return false;
       if (lower.includes('psexec service on')) return false;
-      if (lower.startsWith('connecting to')) return false;
-      if (lower.startsWith('starting cmd on')) return false;
-      if (lower.startsWith('starting powershell on')) return false;
       if (lower.startsWith('copying authentication key to')) return false;
-      
-      // Filtra mensagens de progresso/finalização que poluem o output
-      if (lower.includes('exited on') && lower.includes('with error code')) return false;
-      if (lower.includes('cmd exited on')) return false;
-      if (lower.includes('powershell exited on')) return false;
-      
-      // Prompt removal (e.g., C:\> or C:\Windows\system32>)
-      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
       
       return true;
     });
