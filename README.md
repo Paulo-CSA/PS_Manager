@@ -1,20 +1,17 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+Node.js
 
-# Run and deploy your AI Studio app
+1. diretorio de execução dos psexec (c:\windows\system32)
 
-This contains everything you need to run your app locally.
+2. maquinas win com liberação (reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f)
 
-View your app in AI Studio: https://ai.studio/apps/8ce91256-4925-4f3f-aaa5-5e187c32ef77
+3. Install dependencies: npm install
 
-## Run Locally
+4. Instalar o GIT
 
-**Prerequisites:**  Node.js
+5. Instalar o node 
 
+6. npm install -g pm2
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Run the app: npm run dev
+
+mp2 install (opicional)
