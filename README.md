@@ -17,8 +17,7 @@ Node.js
 Run the app: start /B npm run dev
 
 01. FECHAR
-netstat -ano | findstr :3000
-
-tasklist | findstr 1234
+02. netstat -ano | findstr :3000
+03. tasklist | findstr 1234
 
 
