@@ -34,6 +34,9 @@ const App = () => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'config'>('dashboard');
   
   const [statusFilter, setStatusFilter] = useState<'all' | 'online'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
   
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -328,6 +331,25 @@ const App = () => {
     }
   };
 
+  // Table Filtering and Pagination
+  const filteredMachines = machines.filter(m => {
+    const matchesStatus = statusFilter === 'all' || m.status === 'online';
+    const matchesSearch = !searchQuery || 
+      m.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      m.ip.includes(searchQuery);
+    return matchesStatus && matchesSearch;
+  });
+
+  const totalPages = Math.ceil(filteredMachines.length / itemsPerPage);
+  const currentMachines = filteredMachines.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter]);
+
   if (loading) return <div className="min-h-screen bg-[#111] flex items-center justify-center text-white font-mono">LOADING_SYSTEM...</div>;
 
   return (
@@ -477,6 +499,24 @@ const App = () => {
                       Online
                     </button>
                   </div>
+
+                  <div className="relative ml-2">
+                    <input 
+                      type="text"
+                      placeholder="Pesquisar por Nome ou IP..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="bg-[#1A1B1E] border border-white/5 rounded-lg px-4 py-1.5 text-xs focus:outline-none focus:border-blue-500/50 w-64 transition-all"
+                    />
+                    {searchQuery && (
+                      <button 
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+                      >
+                        <XCircle size={14} />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <button 
                   onClick={() => setIsAddModalOpen(true)}
@@ -503,15 +543,17 @@ const App = () => {
                   <div className="col-span-2 text-center">Ações</div>
                 </div>
 
-                <div className="divide-y divide-white/5 max-h-[500px] overflow-y-auto">
+                <div className="divide-y divide-white/5 max-h-[600px] overflow-y-auto">
                   {machines.length === 0 ? (
                     <div className="p-12 text-center text-gray-500">
                       <Monitor size={48} className="mx-auto mb-4 opacity-20" />
                       <p>Nenhuma máquina cadastrada no sistema.</p>
                     </div>
-                  ) : machines
-                    .filter(m => statusFilter === 'all' || m.status === 'online')
-                    .map(m => (
+                  ) : currentMachines.length === 0 ? (
+                    <div className="p-12 text-center text-gray-500">
+                      <p>Nenhuma máquina encontrada nos filtros atuais.</p>
+                    </div>
+                  ) : currentMachines.map(m => (
                     <div key={m.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-white/[0.02] transition-colors">
                       <div className="col-span-1 flex items-center justify-center">
                         <input 
@@ -561,6 +603,30 @@ const App = () => {
                     </div>
                   ))}
                 </div>
+
+                {/* Pagination Footer */}
+                {totalPages > 1 && (
+                  <div className="px-6 py-4 bg-[#111113] border-t border-white/5 flex items-center justify-between">
+                    <span className="text-[10px] text-gray-500 font-mono uppercase tracking-widest">
+                      Mostrando {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredMachines.length)} de {filteredMachines.length}
+                    </span>
+                    <div className="flex gap-1">
+                      {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                        <button
+                          key={page}
+                          onClick={() => setCurrentPage(page)}
+                          className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${
+                            currentPage === page 
+                              ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
+                              : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'
+                          }`}
+                        >
+                          {page}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Console Output */}
