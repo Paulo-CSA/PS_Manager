@@ -194,18 +194,18 @@ async function startServer() {
 
       // No Windows nativo, psexec -c lida com o upload e execução em um passo só
       // Adicionamos -f para forçar o backup/copy se já existir
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${tempScriptPath}"`;
+      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -f -c "${tempScriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
       const { stdout, stderr } = await execWin(runCmd, 120000);
       
-      const rawOutput = (stdout || '') + (stderr || '');
+      const rawOutput = [stdout, stderr].filter(Boolean).join('\n');
       const output = cleanOutput(rawOutput);
-      res.json({ output: output || 'Script executado com sucesso e removido da máquina de destino.' });
+      res.json({ output: output || 'Script executado com sucesso.' });
     } catch (err: any) {
-      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
+      const rawError = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
       const cleaned = cleanOutput(rawError);
-      res.status(500).json({ error: cleaned || rawError || 'Erro ao executar script' });
+      res.status(500).json({ error: cleaned || 'Erro ao executar script' });
     } finally {
       // Cleanup do arquivo temporário no servidor
       try {
@@ -239,25 +239,24 @@ async function startServer() {
       let fullCmd;
       if (command.toLowerCase().includes('powershell')) {
           // Para powershell, evitamos o cmd /c se possível para não quebrar pipes
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
+          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula ${command}`;
       } else {
           // No Windows, envolvemos o comando em aspas para o CMD
           const escapedCommand = command.replace(/"/g, '""');
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula cmd /c "${escapedCommand}"`;
       }
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
       const { stdout, stderr } = await execWin(fullCmd, 45000);
-
-      const rawOutput = (stdout || '') + (stderr || '');
+      const rawOutput = [stdout, stderr].filter(Boolean).join('\n');
       const output = cleanOutput(rawOutput) || 'Comando executado com sucesso (sem retorno).';
 
       res.json({ output });
     } catch (err: any) {
-      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
+      const rawError = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
       const cleaned = cleanOutput(rawError);
-      res.status(500).json({ error: cleaned || rawError || 'Erro na conexão PsExec' });
+      res.status(500).json({ error: cleaned || 'Erro na conexão PsExec' });
     }
   });
 
@@ -271,32 +270,31 @@ async function startServer() {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
             let fullCmd;
             if (command.toLowerCase().includes('powershell')) {
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
+                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula ${command}`;
             } else {
                 const escapedCommand = command.replace(/"/g, '""');
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula cmd /c "${escapedCommand}"`;
             }
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
             const { stdout, stderr } = await execWin(fullCmd, 60000);
-            
-            const rawOutput = (stdout || '') + (stderr || '');
+            const rawOutput = [stdout, stderr].filter(Boolean).join('\n');
             const cleaned = cleanOutput(rawOutput);
             
             return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
           } else {
             // Local fallback
             const { stdout, stderr } = await execWin(command);
-            return { host, status: 'success', output: stdout + stderr };
+            return { host, status: 'success', output: [stdout, stderr].filter(Boolean).join('\n') };
           }
         } catch (err: any) {
-          const rawError = (err.stdout || '') + (err.stderr || err.message || '');
+          const rawError = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
           const cleaned = cleanOutput(rawError);
           return { 
             host, 
             status: 'failed', 
-            output: cleaned || rawError || 'Erro desconhecido durante execução remota'
+            output: cleaned || 'Erro desconhecido durante execução remota'
           };
         }
       }));
@@ -307,52 +305,13 @@ async function startServer() {
     }
   });
 
-  // Helper para limpar logs de header de ferramentas como PsExec
+  // Helper para retornar o output o mais fiel possível ao CMD original
   function cleanOutput(raw: string): string {
     if (!raw) return '';
-
-    // Padrões de banner do PsExec que queremos remover
-    const bannerPatterns = [
-      /PsExec v[0-9.]+/gi,
-      /Sysinternals - www\.sysinternals\.com/gi,
-      /Copyright \(C\) [0-9-]+ Mark Russinovich/gi,
-      /Starting [a-zA-Z.]+ service on [0-9.]+[.\s]*/gi,
-      /Connecting (?:with|to) [a-zA-Z.]+ service on [0-9.]+[.\s]*/gi,
-      /Connecting to [0-9.]+[.\s]*/gi,
-      /Starting [^ ]+ on [0-9.]+[.\s]*/gi,
-      /Copying authentication key to [0-9.]+[.\s]*/gi,
-      /exited on [0-9.]+ with error code [0-9]+[.\s]*/gi,
-      /cmd exited on [0-9.]+[.\s]*/gi,
-      /PsExec could not start [^ ]+ on [0-9.]+[.\s]*/gi,
-      /PSEXESVC[.\s]*/gi
-    ];
-
-    // 1. Normalização: remove nulos e trata \r como \n para separar mensagens concatenadas
-    let cleaned = raw.replace(/\0/g, '').replace(/\r/g, '\n');
-
-    // 2. Remoção dos padrões específicos (mesmo no meio de strings)
-    bannerPatterns.forEach(pattern => {
-      cleaned = cleaned.replace(pattern, '');
-    });
-
-    // 3. Processamento por linha para limpeza final
-    const lines = cleaned.split('\n');
-    const filtered = lines.filter(line => {
-      const l = line.trim();
-      if (!l) return false;
-      
-      // Remove prompts (C:\Windows> etc)
-      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
-
-      // Remove ruídos isolados
-      const lowerL = l.toLowerCase();
-      if (lowerL === 'cmd' || lowerL === 'powershell') return false;
-      if (l.includes('Mark Russinovich')) return false;
-      
-      return true;
-    });
-
-    return filtered.join('\n').trim();
+    
+    // Remove caracteres nulos (\0) que podem quebrar o JSON/Browser
+    // e normaliza quebras de linha para exibição uniforme
+    return raw.replace(/\0/g, '').replace(/\r/g, '\n').trim();
   }
 
   // Vite integration

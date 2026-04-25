@@ -360,7 +360,14 @@ const App = () => {
           a.length > 2 && 
           !a.includes('----') &&
           !a.startsWith('Name') &&
-          !a.startsWith('Success')
+          !a.startsWith('Success') &&
+          // Filtro mínimo para não poluir a lista com o banner bruto, 
+          // mas permitindo ver quase tudo o que o CMD retornou
+          !a.toLowerCase().includes('mark russinovich') &&
+          !a.toLowerCase().includes('sysinternals') &&
+          !a.startsWith('Starting') &&
+          !a.startsWith('Connecting') &&
+          !a.startsWith('PsExec v')
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
