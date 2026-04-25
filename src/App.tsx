@@ -41,6 +41,8 @@ const App = () => {
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isExecModalOpen, setIsExecModalOpen] = useState(false);
+  const [execResult, setExecResult] = useState<{host: string, status: string, output: string}[] | null>(null);
+  const [execLoading, setExecLoading] = useState(false);
   const [isIPModalOpen, setIsIPModalOpen] = useState(false);
   const [isAppModalOpen, setIsAppModalOpen] = useState(false);
   const [isWaitModalOpen, setIsWaitModalOpen] = useState(false);
@@ -914,14 +916,29 @@ const App = () => {
               exit={{ opacity: 0, scale: 0.9 }}
               className="bg-[#151619] border border-white/10 rounded-3xl p-8 w-full max-w-lg shadow-2xl"
             >
-              <h3 className="text-xl font-bold mb-2 flex items-center gap-2">
-                <Terminal className="text-blue-500" /> Execução Remota
-              </h3>
-              <p className="text-xs text-gray-500 mb-6 font-mono capitals">
-                ENVIANDO COMANDO PARA {tempExecHost ? tempExecHost[0] : selectedHosts.length + ' HOSTS'}
-              </p>
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h3 className="text-xl font-bold mb-1 flex items-center gap-2">
+                    <Terminal className="text-blue-500" /> Execução Remota
+                  </h3>
+                  <p className="text-xs text-gray-500 font-mono capitals">
+                    ENVIANDO COMANDO PARA {tempExecHost ? tempExecHost[0] : selectedHosts.length + ' HOSTS'}
+                  </p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setExecResult(null);
+                    setCustomCommand('');
+                    setIsExecModalOpen(false);
+                    setTempExecHost(null);
+                  }}
+                  className="p-2 hover:bg-white/5 rounded-full transition-colors text-gray-500 hover:text-white"
+                >
+                  <XCircle size={20} />
+                </button>
+              </div>
               
-              <div className="bg-black rounded-xl p-4 mb-6 border border-white/5 shadow-inner">
+              <div className="bg-black rounded-xl p-4 mb-4 border border-white/5 shadow-inner">
                 <div className="flex gap-2 text-emerald-500 font-mono text-sm mb-2">
                   <span className="shrink-0 tracking-tighter">C:\Windows\system32{'>'}</span>
                   <input 
@@ -931,30 +948,62 @@ const App = () => {
                     onChange={e => setCustomCommand(e.target.value)}
                     className="bg-transparent border-none outline-none flex-1 min-w-0"
                     placeholder="..."
-                    onKeyPress={e => e.key === 'Enter' && (executeRemote(customCommand, tempExecHost || undefined), setIsExecModalOpen(false), setTempExecHost(null))}
+                    onKeyPress={async e => {
+                      if (e.key === 'Enter' && customCommand.trim()) {
+                        setExecLoading(true);
+                        const res = await executeRemote(customCommand, tempExecHost || undefined);
+                        setExecResult(res);
+                        setExecLoading(false);
+                        setCustomCommand('');
+                      }
+                    }}
                   />
+                  {execLoading && <RefreshCw size={14} className="animate-spin text-blue-500" />}
                 </div>
-                <div className="text-[10px] text-gray-600 uppercase tracking-tighter">Enter para executar instantaneamente</div>
+                <div className="text-[10px] text-gray-600 uppercase tracking-tighter">Enter para executar</div>
               </div>
+
+              {/* Action output area */}
+              {(execResult || execLoading) && (
+                <div className="bg-black/50 border border-white/5 rounded-xl p-4 mb-6 max-h-64 overflow-y-auto custom-scrollbar font-mono text-[11px]">
+                  {execLoading ? (
+                    <div className="flex items-center gap-2 text-blue-400 animate-pulse">
+                      <RefreshCw size={10} className="animate-spin" />
+                      <span>EXECUTANDO COMANDO...</span>
+                    </div>
+                  ) : execResult?.map((r, i) => (
+                    <div key={i} className="mb-2 last:mb-0">
+                      <div className={`font-bold ${r.status === 'success' ? 'text-emerald-500' : 'text-red-500'}`}>
+                        [{r.host}] {r.status.toUpperCase()}
+                      </div>
+                      <pre className="text-gray-400 whitespace-pre-wrap break-all mt-1">{r.output || 'Sem saída.'}</pre>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="flex gap-3">
                 <button 
                   onClick={() => {
-                    setIsExecModalOpen(false);
-                    setTempExecHost(null);
-                  }}
-                  className="flex-1 py-3 bg-white/5 rounded-xl text-sm font-bold transition-all"
-                >
-                  Fechar
-                </button>
-                <button 
-                  onClick={() => {
-                    executeRemote(customCommand, tempExecHost || undefined);
+                    setExecResult(null);
                     setCustomCommand('');
                     setIsExecModalOpen(false);
                     setTempExecHost(null);
                   }}
-                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-all"
+                  className="px-6 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm font-bold transition-all"
+                >
+                  Fechar
+                </button>
+                <button 
+                  disabled={execLoading || !customCommand.trim()}
+                  onClick={async () => {
+                    setExecLoading(true);
+                    const res = await executeRemote(customCommand, tempExecHost || undefined);
+                    setExecResult(res);
+                    setExecLoading(false);
+                    setCustomCommand('');
+                  }}
+                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition-all disabled:opacity-50"
                 >
                   Executar Agora
                 </button>
