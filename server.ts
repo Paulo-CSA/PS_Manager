@@ -110,16 +110,18 @@ async function startServer() {
   app.post('/api/shell', async (req, res) => {
     const { host, command } = req.body;
     const db = await readDb();
-    const machine = db.machines.find((m: any) => m.host === host);
+    const machine = db.machines.find((m: any) => m.ip === host);
 
     if (!machine) {
       return res.status(404).json({ error: 'Host não encontrado na base de dados' });
     }
 
-    const { username, password } = machine;
-    if (!username || !password) {
+    const creds = db.credentials[host];
+    if (!creds || !creds.user || !creds.pass) {
       return res.status(400).json({ error: 'Credenciais não configuradas para este host' });
     }
+
+    const { user: username, pass: password } = creds;
 
     const wmiBase = '/root/.local/bin/wmiexec.py';
 
