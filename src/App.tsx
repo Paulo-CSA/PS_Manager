@@ -24,7 +24,7 @@ interface Credentials {
 // --- App Component ---
 
 const App = () => {
-  // Use a stable dummy user ID for local storage
+  // Use a stable dummy user ID for local storage (legacy ref, keeping for stability)
   const [user] = useState({ uid: 'ps-manager-local-user' });
   const [loading, setLoading] = useState(true);
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -47,25 +47,40 @@ const App = () => {
   const [installedApps, setInstalledApps] = useState<string[]>([]);
   const [tempExecHost, setTempExecHost] = useState<string[] | null>(null);
 
-  // Load data from LocalStorage
+  // Load data from Server
   useEffect(() => {
-    const savedMachines = localStorage.getItem(`machines_${user.uid}`);
-    if (savedMachines) setMachines(JSON.parse(savedMachines));
+    fetch('/api/data')
+      .then(res => res.json())
+      .then(db => {
+        if (db.machines) setMachines(db.machines);
+        if (db.credentials) setCreds(db.credentials);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error('Falha ao carregar dados do servidor', err);
+        setLoading(false);
+      });
+  }, []);
 
-    const savedCreds = localStorage.getItem(`creds_${user.uid}`);
-    if (savedCreds) setCreds(JSON.parse(savedCreds));
-
-    setLoading(false);
-  }, [user.uid]);
-
-  // Save data to LocalStorage whenever it changes
+  // Save machines to Server whenever they change
   useEffect(() => {
-    localStorage.setItem(`machines_${user.uid}`, JSON.stringify(machines));
-  }, [machines, user.uid]);
+    if (loading) return;
+    fetch('/api/machines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ machines })
+    });
+  }, [machines, loading]);
 
+  // Save credentials to Server whenever they change
   useEffect(() => {
-    localStorage.setItem(`creds_${user.uid}`, JSON.stringify(creds));
-  }, [creds, user.uid]);
+    if (loading) return;
+    fetch('/api/credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credentials: creds })
+    });
+  }, [creds, loading]);
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
