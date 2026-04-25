@@ -348,8 +348,9 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    // Comando PowerShell otimizado conforme sugestão do usuário
-    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName"`, [host]);
+    // Comando PowerShell mais abrangente para listar apps
+    const listCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName | Sort-Object"`;
+    const results = await executeRemote(listCmd, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
@@ -357,16 +358,9 @@ const App = () => {
         .map((a: string) => a.trim())
         .filter((a: string) => 
           a.length > 2 && 
-          !a.includes('Name') && 
           !a.includes('----') &&
-          !a.includes('[') &&
-          !a.startsWith('Success') &&
-          // Filtros mais específicos usando regex para não remover apps legítimos que contenham essas palavras
-          !/PsExec v/i.test(a) &&
-          !/Starting [^ ]+ on/i.test(a) &&
-          !/Connecting to/i.test(a) &&
-          !/Copying authentication/i.test(a) &&
-          !/exited on .* with error/i.test(a)
+          !a.startsWith('Name') &&
+          !a.startsWith('Success')
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
