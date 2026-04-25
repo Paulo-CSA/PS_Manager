@@ -165,7 +165,7 @@ const App = () => {
   const runPing = async () => {
     if (machines.length === 0) return;
     const hosts = machines.map(m => m.ip);
-    setLog(prev => [...prev, `[SYSTEM] Iniciando teste de ping em ${hosts.length} máquinas...`]);
+    setLog(prev => [...prev, `[SYSTEM] Verificando conectividade via porta 445 (SMB) em ${hosts.length} hosts...`]);
     
     try {
       const res = await fetch('/api/ping', {
@@ -175,6 +175,11 @@ const App = () => {
       });
       const results = await res.json();
       
+      results.forEach((r: any) => {
+        const icon = r.alive ? '✅' : '❌';
+        setLog(prev => [...prev, `[PING] ${r.host} está ${r.alive ? 'ONLINE' : 'OFFLINE'} ${icon}`]);
+      });
+
       setMachines(prev => prev.map(m => {
         const r = results.find((res: any) => res.host === m.ip);
         if (r) {
@@ -182,7 +187,7 @@ const App = () => {
         }
         return m;
       }));
-      setLog(prev => [...prev, `[SYSTEM] Teste de ping concluído.`]);
+      setLog(prev => [...prev, `[SYSTEM] Verificação de conectividade concluída.`]);
     } catch (err) {
       setLog(prev => [...prev, `[ERROR] Falha ao realizar ping.`]);
     }
@@ -200,6 +205,7 @@ const App = () => {
     }
 
     setLog(prev => [...prev, `[CMD] Executando: "${command}" em ${targets.length} hosts...`]);
+    setLog(prev => [...prev, `[SYSTEM] Nota: Os resultados dos comandos são simulados neste ambiente de demonstração.`]);
     
     try {
       const res = await fetch('/api/exec', {

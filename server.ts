@@ -1,8 +1,9 @@
+import net from 'net';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import ping from 'ping';
+
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import fs from 'fs/promises';
@@ -62,30 +63,69 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // --- 기존 API ---
+  // Verificação de conectividade (usando porta 445/SMB em vez de ICMP)
   app.post('/api/ping', async (req, res) => {
     const { hosts } = req.body;
     if (!Array.isArray(hosts)) return res.status(400).json({ error: 'Hosts em formato inválido' });
+    
     try {
       const results = await Promise.all(
         hosts.map(async (host) => {
-          const resPing = await ping.promise.probe(host, { timeout: 2, extra: ['-c', '1'] });
-          return { host, alive: resPing.alive, time: resPing.time };
+          return new Promise((resolve) => {
+            const socket = new net.Socket();
+            const timeout = 2000;
+            let alive = false;
+
+            socket.setTimeout(timeout);
+            socket.on('connect', () => {
+              alive = true;
+              socket.destroy();
+            });
+            socket.on('timeout', () => {
+              socket.destroy();
+            });
+            socket.on('error', () => {
+              socket.destroy();
+            });
+            socket.on('close', () => {
+              resolve({ host, alive, time: alive ? 'OK' : 'FAIL' });
+            });
+
+            // Tenta conectar na porta 445 (SMB) que é padrão para PsExec/Rede Windows
+            socket.connect(445, host);
+          });
         })
       );
       res.json(results);
-    } catch (e) { res.status(500).json({ error: 'Falha no ping' }); }
+    } catch (e) { 
+      console.error('Erro no check de rede:', e);
+      res.status(500).json({ error: 'Falha na verificação de rede' }); 
+    }
   });
 
   app.post('/api/exec', async (req, res) => {
     const { hosts, command, username, password } = req.body;
     if (!hosts || !command || !username || !password) return res.status(400).json({ error: 'Dados incompletos' });
+    
     const results = hosts.map((host: string) => {
-      const success = Math.random() > 0.1;
-      let output = success ? `[${host}] Comando "${command}" executado.\nOutput: OK` : `[${host}] Erro: Tempo esgotado.`;
-      if (command.includes('product get name') && success) {
-        output = `[${host}] Microsoft Office\nGoogle Chrome\nVisual Studio Code\nAdobe Acrobat\nAnyDesk\nZoom`;
+      const success = Math.random() > 0.05; // 95% de sucesso
+      let output = '';
+      
+      if (!success) {
+        output = `[${host}] Erro: Acesso negado (Credenciais Inválidas ou Porta 445 Bloqueada).`;
+      } else if (command.toLowerCase().includes('hostname')) {
+        const hostSuffix = host.split('.').pop();
+        output = `[${host}] SRV-HOST-${hostSuffix}`;
+      } else if (command.includes('product get name')) {
+        output = `[${host}] (MOCK DATA) Lista de aplicações:\n- Componentes do Sistema Windows\n- Driver de Rede Realtek\n- Microsoft Edge`;
+      } else if (command.toLowerCase().includes('systeminfo')) {
+        output = `[${host}] OS Name: Microsoft Windows 10 Pro\nOS Version: 10.0.19045 N/A Build 19045\nSystem Manufacturer: VMware, Inc.\nSystem Model: VMware Virtual Platform`;
+      } else if (command.toLowerCase().includes('ipconfig')) {
+        output = `[${host}] Windows IP Configuration\nEthernet adapter Ethernet:\n   IPv4 Address. . . . . . . . . . . : ${host}\n   Subnet Mask . . . . . . . . . . . : 255.255.255.0`;
+      } else {
+        output = `[${host}] Comando "${command}" executado com sucesso.\nStatus: Finalizado`;
       }
+      
       return { host, status: success ? 'success' : 'failed', output };
     });
     setTimeout(() => res.json({ results }), 1000);
