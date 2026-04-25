@@ -171,10 +171,14 @@ async function startServer() {
       await execAsync(mkdirCmd, { timeout: 15000 }).catch(() => {}); 
 
       // 2. Upload do arquivo via smbclient.py para C:\PCManager\
+      // Impacket's smbclient.py doesn't have -c, so we pipe commands
+      const scriptFileName = path.basename(scriptPath);
       const smbclientPath = '/root/.local/bin/smbclient.py';
-      const uploadCmd = `${smbclientPath} "${username}:${password}@${host}" -c "use C$; cd PCManager; put ${scriptPath}; exit"`;
+      // We use a temporary file to pipe commands or use a shell string with printf
+      const uploadCmd = `printf "use C$\\ncd PCManager\\nput ${scriptPath}\\nexit\\n" | ${smbclientPath} "${username}:${password}@${host}"`;
+      
       console.log(`[SCRIPT_UPLOAD] ${uploadCmd}`);
-      await execAsync(uploadCmd, { timeout: 30000 });
+      await execAsync(uploadCmd, { timeout: 45000, shell: '/bin/bash' });
 
       // 3. Executar o script via wmiexec
       const wmiPath = '/root/.local/bin/wmiexec.py';
