@@ -101,8 +101,12 @@ const App = () => {
       lines.forEach(line => {
         const [name, ip] = line.split(',').map(s => s.trim());
         if (name && ip) {
+          const mId = (typeof window !== 'undefined' && window.crypto && typeof window.crypto.randomUUID === 'function')
+            ? window.crypto.randomUUID() 
+            : Math.random().toString(36).substring(2, 11);
+
           batch.push({
-            id: crypto.randomUUID(),
+            id: mId,
             name,
             ip,
             status: 'unknown',
@@ -123,19 +127,39 @@ const App = () => {
 
   const addMachine = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMachine.name || !newMachine.ip) return;
-    
-    const machine: Machine = {
-      id: crypto.randomUUID(),
-      name: newMachine.name,
-      ip: newMachine.ip,
-      status: 'unknown',
-      ownerId: user.uid
-    };
+    console.log('addMachine iniciado', newMachine);
+    try {
+      if (!newMachine.name || !newMachine.ip) {
+        setLog(prev => [...prev, `[ERROR] Nome ou IP faltando.`]);
+        return;
+      }
+      
+      const machineId = (typeof window !== 'undefined' && window.crypto && typeof window.crypto.randomUUID === 'function')
+        ? window.crypto.randomUUID() 
+        : Math.random().toString(36).substring(2, 11);
 
-    setMachines(prev => [...prev, machine]);
-    setNewMachine({ name: '', ip: '' });
-    setIsAddModalOpen(false);
+      const machine: Machine = {
+        id: machineId,
+        name: newMachine.name,
+        ip: newMachine.ip,
+        status: 'unknown',
+        ownerId: user.uid
+      };
+
+      console.log('Adicionando máquina:', machine);
+      setMachines(prev => {
+        const next = [...prev, machine];
+        console.log('Nova lista de máquinas:', next);
+        return next;
+      });
+      
+      setLog(prev => [...prev, `[SYSTEM] Máquina ${machine.name} (${machine.ip}) cadastrada com sucesso.`]);
+      setNewMachine({ name: '', ip: '' });
+      setIsAddModalOpen(false);
+    } catch (err) {
+      console.error('Erro ao adicionar máquina:', err);
+      setLog(prev => [...prev, `[ERROR] Falha ao cadastrar máquina: ${err instanceof Error ? err.message : 'Erro desconhecido'}`]);
+    }
   };
 
   const deleteMachine = (id: string) => {
