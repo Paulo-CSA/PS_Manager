@@ -221,6 +221,7 @@ const App = () => {
     }
 
     setLog(prev => [...prev, `[CMD] Executando: "${command}" em ${targets.length} hosts...`]);
+    setLog(prev => [...prev, `[TIP] Para execução remota real em Windows a partir de Linux, certifique-se de que o 'psexec.py' (Impacket) está instalado no servidor.`]);
     
     try {
       const res = await fetch('/api/exec', {

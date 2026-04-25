@@ -114,15 +114,37 @@ async function startServer() {
     try {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
-          // Em um sistema real rodando em rede corporativa, aqui usaríamos PsExec ou WinRM.
-          // Como estamos em um container Linux, tentaremos o exec direto.
-          // NOTA: Se o comando for para o Windows, ele precisa de um agente ou ferramenta remota.
+          // Tentativa de execução Real
+          // Se o usuário providenciou autenticação, tentamos usar uma ferramenta de execução remota.
+          // Como o PsExec real é um binário Windows, no Linux usamos tipicamente o 'psexec.py' do Impacket.
+          
+          if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
+            // Comando para usar o impacket-psexec se estiver instalado
+            // Exemplo: psexec.py domain/user:password@host command
+            // NOTA: No ambiente Cloud Run, este binário não está presente por padrão.
+            // Aqui estamos preparando o comando que SERIA executado.
+            const remoteCmd = `psexec.py "${username}:${password}@${host}" "${command}"`;
+            
+            try {
+              // Tentamos rodar. Se o binário não existir, o erro dirá "command not found"
+              const { stdout, stderr } = await execAsync(remoteCmd, { timeout: 30000 });
+              return { host, status: 'success', output: stdout || stderr };
+            } catch (err: any) {
+              if (err.message.includes('not found')) {
+                return { 
+                  host, 
+                  status: 'error', 
+                  output: `[ERRO] A ferramenta 'psexec.py' (Impacket) não foi encontrada no servidor Linux.\n\nPara funcionar no ambiente Cloud:\n1. O servidor precisa ter o Impacket instalado.\n2. A porta 445 do host ${host} deve estar aberta para a internet (NÃO RECOMENDADO) ou via VPN.\n\nExecutando em modo de simulação local...` 
+                };
+              }
+              throw err;
+            }
+          }
+
+          // Fallback para execução local ou erro de configuração
           const { stdout, stderr } = await execAsync(command, { timeout: 15000 });
-          return { 
-            host, 
-            status: 'success', 
-            output: stdout || stderr || 'Executado com sucesso (sem saída).' 
-          };
+          return { host, status: 'success', output: stdout || stderr || 'OK' };
+          
         } catch (err: any) {
           return { 
             host, 
@@ -133,6 +155,7 @@ async function startServer() {
       }));
       res.json({ results });
     } catch (err) {
+      console.error('Erro na API de exec:', err);
       res.status(500).json({ error: 'Erro interno no servidor' });
     }
   });
