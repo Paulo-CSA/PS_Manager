@@ -6,10 +6,18 @@ import ping from 'ping';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import fs from 'fs/promises';
+import { existsSync, mkdirSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_FILE = path.join(__dirname, 'data.json');
+const DATA_DIR = path.join(__dirname, 'server_storage');
+const DATA_FILE = path.join(DATA_DIR, 'persistence.json');
+
+// Ensure data directory exists
+if (!existsSync(DATA_DIR)) {
+  mkdirSync(DATA_DIR);
+  console.log(`>>> Criado diretório de persistência em: ${DATA_DIR}`);
+}
 
 // Helper to read/write JSON database
 async function readDb() {

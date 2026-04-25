@@ -127,12 +127,8 @@ const App = () => {
 
   const addMachine = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('addMachine iniciado', newMachine);
     try {
-      if (!newMachine.name || !newMachine.ip) {
-        setLog(prev => [...prev, `[ERROR] Nome ou IP faltando.`]);
-        return;
-      }
+      if (!newMachine.name || !newMachine.ip) return;
       
       const machineId = (typeof window !== 'undefined' && window.crypto && typeof window.crypto.randomUUID === 'function')
         ? window.crypto.randomUUID() 
@@ -146,19 +142,13 @@ const App = () => {
         ownerId: user.uid
       };
 
-      console.log('Adicionando máquina:', machine);
-      setMachines(prev => {
-        const next = [...prev, machine];
-        console.log('Nova lista de máquinas:', next);
-        return next;
-      });
-      
+      setMachines(prev => [...prev, machine]);
       setLog(prev => [...prev, `[SYSTEM] Máquina ${machine.name} (${machine.ip}) cadastrada com sucesso.`]);
       setNewMachine({ name: '', ip: '' });
       setIsAddModalOpen(false);
     } catch (err) {
       console.error('Erro ao adicionar máquina:', err);
-      setLog(prev => [...prev, `[ERROR] Falha ao cadastrar máquina: ${err instanceof Error ? err.message : 'Erro desconhecido'}`]);
+      setLog(prev => [...prev, `[ERROR] Falha ao cadastrar máquina.`]);
     }
   };
 
