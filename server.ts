@@ -167,15 +167,13 @@ async function startServer() {
       const { username, password } = creds;
       
       // No Windows nativo, psexec -c lida com o upload e execução em um passo só
-      // Adicionamos -f para forçar o backup/copy se já existir e -i se puder ser interativo
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${scriptPath}"`;
+      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -c "${scriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
       const { stdout, stderr } = await execAsync(runCmd, { timeout: 120000 });
       
-      const rawOutput = (stdout || '') + (stderr || '');
-      const output = cleanOutput(rawOutput);
-      res.json({ output: output || 'Script executado com sucesso.' });
+      const output = cleanOutput(stdout + stderr);
+      res.json({ output: output || 'Script executado com sucesso e removido da máquina alvo.' });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       const cleaned = cleanOutput(rawError);
@@ -200,29 +198,21 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      let fullCmd;
-      // Para comandos simples sem redirecionamento ou pipes, podemos chamar direto.
-      // Isso ajuda a evitar problemas de aspas extras do cmd /c.
-      const hasSpecialChars = /[&|<>^]/.test(command);
-      
-      if (!hasSpecialChars) {
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
-      } else {
-          const escapedCommand = command.replace(/"/g, '""');
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-      }
+      // No Windows, escapamos as aspas duplas se existirem no comando
+      const escapedCommand = command.replace(/"/g, '""');
+      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
       const { stdout, stderr } = await execAsync(fullCmd, { 
-        timeout: 60000,
-        maxBuffer: 1024 * 1024 // 1MB
+        timeout: 45000,
+        maxBuffer: 1024 * 512 
       });
 
       const rawOutput = (stdout || '') + (stderr || '');
-      const output = cleanOutput(rawOutput);
+      const output = cleanOutput(rawOutput) || 'Comando executado com sucesso (sem retorno).';
 
-      res.json({ output: output || rawOutput || 'Comando executado com sucesso (sem retorno).' });
+      res.json({ output });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       const cleaned = cleanOutput(rawError);
@@ -238,15 +228,8 @@ async function startServer() {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            let fullCmd;
-            const hasSpecialChars = /[&|<>^]/.test(command);
-            
-            if (!hasSpecialChars) {
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
-            } else {
-                const escapedCommand = command.replace(/"/g, '""');
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-            }
+            const escapedCommand = command.replace(/"/g, '""');
+            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
@@ -258,8 +241,7 @@ async function startServer() {
             const rawOutput = (stdout || '') + (stderr || '');
             const cleaned = cleanOutput(rawOutput);
             
-            // Se o comando teve output real, usamos ele. Se foi vazio ou so tinha cabeçalho, enviamos o raw ou mensagem padrão.
-            return { host, status: 'success', output: cleaned || rawOutput || 'Executado com sucesso (sem retorno).' };
+            return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
           } else {
             // Local fallback
             const { stdout, stderr } = await execAsync(command);
@@ -282,9 +264,31 @@ async function startServer() {
     }
   });
 
-  // Helper para manter o output bruto conforme solicitado
+  // Helper para limpar logs de header de ferramentas como PsExec
   function cleanOutput(raw: string): string {
-    return raw.trim();
+    const bannerKeywords = [
+      'PsExec v',
+      'Sysinternals - www.sysinternals.com',
+      'Copyright (C)',
+      'Starting PsExec service on',
+      'Connecting with PsExec service on',
+      'Connecting to',
+      'Starting cmd on',
+      'Copying authentication key to'
+    ];
+
+    return raw.split('\n').filter(line => {
+      const l = line.trim();
+      if (!l) return false;
+      
+      // Remove se a linha contiver qualquer keyword de banner
+      if (bannerKeywords.some(kw => l.includes(kw))) return false;
+      
+      // Prompt removal (e.g., C:\> or C:\Windows\system32>)
+      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
+      
+      return true;
+    }).join('\n').trim();
   }
 
   // Vite integration
