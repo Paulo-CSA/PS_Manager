@@ -1,10 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  auth, db, googleProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, 
-  collection, addDoc, deleteDoc, onSnapshot, query, where, doc, setDoc, getDoc, updateDoc,
-  User 
-} from './firebase';
-import { 
   Monitor, Settings, Plus, Trash2, Play, Activity, 
   Shield, Terminal, Cpu, CheckCircle, XCircle, RefreshCw,
   LogOut, ChevronRight, Globe, Lock, Key
@@ -26,10 +21,11 @@ interface Credentials {
   password?: string;
 }
 
-// --- Components ---
+// --- App Component ---
 
 const App = () => {
-  const [user, setUser] = useState<User | null>(null);
+  // Use a stable dummy user ID for local storage
+  const [user] = useState({ uid: 'ps-manager-local-user' });
   const [loading, setLoading] = useState(true);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [selectedHosts, setSelectedHosts] = useState<string[]>([]);
@@ -51,69 +47,52 @@ const App = () => {
   const [installedApps, setInstalledApps] = useState<string[]>([]);
   const [tempExecHost, setTempExecHost] = useState<string[] | null>(null);
 
+  // Load data from LocalStorage
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      if (!u) {
-        signInAnonymously(auth).catch(console.error);
-        return;
-      }
-      setUser(u);
-      setLoading(false);
-      
-      // Load machines
-      const q = query(collection(db, 'machines'), where('ownerId', '==', u.uid));
-      const sub = onSnapshot(q, (snapshot) => {
-        setMachines(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Machine)));
-      });
+    const savedMachines = localStorage.getItem(`machines_${user.uid}`);
+    if (savedMachines) setMachines(JSON.parse(savedMachines));
 
-      // Load credentials
-      getDoc(doc(db, 'credentials', u.uid)).then(d => {
-        if (d.exists()) setCreds(d.data());
-      });
+    const savedCreds = localStorage.getItem(`creds_${user.uid}`);
+    if (savedCreds) setCreds(JSON.parse(savedCreds));
 
-      return () => sub();
-    });
-    return () => unsubscribe();
-  }, []);
+    setLoading(false);
+  }, [user.uid]);
 
-  const login = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      console.error(error);
-    }
-  };
+  // Save data to LocalStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem(`machines_${user.uid}`, JSON.stringify(machines));
+  }, [machines, user.uid]);
 
-  const logout = () => auth.signOut();
+  useEffect(() => {
+    localStorage.setItem(`creds_${user.uid}`, JSON.stringify(creds));
+  }, [creds, user.uid]);
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !user) return;
+    if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = async (event) => {
+    reader.onload = (event) => {
       const text = event.target?.result as string;
       const lines = text.split('\n');
-      const batch: any[] = [];
+      const batch: Machine[] = [];
 
       lines.forEach(line => {
         const [name, ip] = line.split(',').map(s => s.trim());
         if (name && ip) {
           batch.push({
+            id: crypto.randomUUID(),
             name,
             ip,
             status: 'unknown',
-            ownerId: user.uid,
-            createdAt: new Date().toISOString()
+            ownerId: user.uid
           });
         }
       });
 
       if (batch.length > 0) {
-        setLog(prev => [...prev, `[CSV] Iniciando importação de ${batch.length} máquinas...`]);
-        for (const item of batch) {
-          await addDoc(collection(db, 'machines'), item);
-        }
+        setLog(prev => [...prev, `[CSV] Importando ${batch.length} máquinas...`]);
+        setMachines(prev => [...prev, ...batch]);
         setLog(prev => [...prev, `[CSV] Importação concluída.`]);
         setIsAddModalOpen(false);
       }
@@ -121,32 +100,31 @@ const App = () => {
     reader.readAsText(file);
   };
 
-  const addMachine = async (e: React.FormEvent) => {
+  const addMachine = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !newMachine.name || !newMachine.ip) return;
-    await addDoc(collection(db, 'machines'), {
-      ...newMachine,
+    if (!newMachine.name || !newMachine.ip) return;
+    
+    const machine: Machine = {
+      id: crypto.randomUUID(),
+      name: newMachine.name,
+      ip: newMachine.ip,
       status: 'unknown',
-      ownerId: user.uid,
-      createdAt: new Date().toISOString()
-    });
+      ownerId: user.uid
+    };
+
+    setMachines(prev => [...prev, machine]);
     setNewMachine({ name: '', ip: '' });
     setIsAddModalOpen(false);
   };
 
-  const deleteMachine = async (id: string) => {
-    await deleteDoc(doc(db, 'machines', id));
+  const deleteMachine = (id: string) => {
+    setMachines(prev => prev.filter(m => m.id !== id));
     setSelectedHosts(prev => prev.filter(h => h !== machines.find(m => m.id === id)?.ip));
   };
 
-  const saveCreds = async () => {
-    if (!user) return;
-    await setDoc(doc(db, 'credentials', user.uid), {
-      ...creds,
-      ownerId: user.uid,
-      updatedAt: new Date().toISOString()
-    });
-    setLog(prev => [...prev, `[SYSTEM] Credenciais atualizadas com sucesso.`]);
+  const saveCreds = () => {
+    // Already saved via useEffect
+    setLog(prev => [...prev, `[SYSTEM] Credenciais salvas localmente.`]);
   };
 
   const runPing = async () => {
@@ -162,16 +140,13 @@ const App = () => {
       });
       const results = await res.json();
       
-      // Update local status in Firestore
-      for (const r of results) {
-        const machine = machines.find(m => m.ip === r.host);
-        if (machine) {
-          await updateDoc(doc(db, 'machines', machine.id), {
-            status: r.alive ? 'online' : 'offline',
-            lastPing: new Date().toISOString()
-          });
+      setMachines(prev => prev.map(m => {
+        const r = results.find((res: any) => res.host === m.ip);
+        if (r) {
+          return { ...m, status: r.alive ? 'online' : 'offline', lastPing: new Date().toISOString() };
         }
-      }
+        return m;
+      }));
       setLog(prev => [...prev, `[SYSTEM] Teste de ping concluído.`]);
     } catch (err) {
       setLog(prev => [...prev, `[ERROR] Falha ao realizar ping.`]);
@@ -240,7 +215,7 @@ const App = () => {
     setIsAppModalOpen(false);
   };
 
-  if (loading || !user) return <div className="min-h-screen bg-[#111] flex items-center justify-center text-white font-mono">LOADING_SYSTEM...</div>;
+  if (loading) return <div className="min-h-screen bg-[#111] flex items-center justify-center text-white font-mono">LOADING_SYSTEM...</div>;
 
   return (
     <div className="min-h-screen bg-[#0A0A0B] text-[#E4E3E0] font-sans selection:bg-blue-500/30">
@@ -275,10 +250,9 @@ const App = () => {
           <div className="h-8 w-[1px] bg-white/10 mx-2" />
 
           <div className="flex items-center gap-3">
-            {user.photoURL && <img src={user.photoURL} className="w-8 h-8 rounded-full border border-white/10" alt="user" />}
             <div className="flex flex-col text-right">
-              <span className="text-[10px] text-gray-500 font-mono">ID_SESSIÃO</span>
-              <span className="text-xs font-mono text-blue-400">{user.uid.substring(0, 8)}...</span>
+              <span className="text-[10px] text-gray-500 font-mono">MODO_LOCAL</span>
+              <span className="text-xs font-mono text-blue-400">{user.uid.substring(0, 10)}</span>
             </div>
           </div>
         </div>
