@@ -11,7 +11,7 @@ import fsp from 'fs/promises';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, 'server_storage');
+const DATA_DIR = path.join(process.cwd(), 'server_storage');
 const DATA_FILE = path.join(DATA_DIR, 'persistence.json');
 
 // Ensure data directory exists
@@ -349,18 +349,23 @@ async function startServer() {
   }
 
   // Vite integration
-  console.log('Iniciando middleware do Vite...');
-  const vite = await createViteServer({
-    server: { 
-      middlewareMode: true
-    },
-    appType: 'spa',
-  });
-
-  app.use(vite.middlewares);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('Iniciando middleware do Vite...');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`>>> Servidor PS_MANAGER rodando em http://0.0.0.0:${port}`);
+    console.log(`>>> Servidor PC_MANAGER rodando em http://0.0.0.0:${port}`);
   });
 }
 
