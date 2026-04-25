@@ -1,20 +1,17 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/8ce91256-4925-4f3f-aaa5-5e187c32ef77
-
 ## Run Locally
 
 **Prerequisites:**  Node.js
 
+1. apt install -y pipx 
+2. pipx ensurepath 
+3. pipx install impacket 
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+4. diretorio de execução dos psexec (/root/.local/bin/psexec.py -h) 
+5. maquinas win com liberação (reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f) 
+
+6. Install dependencies:
+   `npm install` 
+7. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key 
+8. Run the app: 
+   `npm run dev` 
+9. mp2 install (opicional) 
