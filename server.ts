@@ -176,7 +176,8 @@ async function startServer() {
       res.json({ output: output || 'Script executado com sucesso e removido da máquina alvo.' });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-      res.status(500).json({ error: cleanOutput(rawError) || 'Erro ao executar script' });
+      const cleaned = cleanOutput(rawError);
+      res.status(500).json({ error: cleaned || rawError || 'Erro ao executar script' });
     }
   });
 
@@ -197,25 +198,26 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // No Windows, escapamos as aspas duplas se existirem no comando
+      // No Windows, usamos o padrão cmd /s /c e envolvemos o comando em aspas extras 
+      // para que o CMD não interprete erroneamente pipes (|) ou aspas aninhadas.
       const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /s /c ""${escapedCommand}""`;
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
       const { stdout, stderr } = await execAsync(fullCmd, { 
-        timeout: 30000,
+        timeout: 45000,
         maxBuffer: 1024 * 512 
       });
 
       const rawOutput = (stdout || '') + (stderr || '');
-      const output = cleanOutput(rawOutput) || 'Comando executado.';
+      const output = cleanOutput(rawOutput) || 'Comando executado com sucesso (sem retorno).';
 
       res.json({ output });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-      const detailedError = cleanOutput(rawError) || 'Erro na conexão PsExec';
-      res.status(500).json({ error: detailedError });
+      const cleaned = cleanOutput(rawError);
+      res.status(500).json({ error: cleaned || rawError || 'Erro na conexão PsExec' });
     }
   });
 
@@ -228,7 +230,7 @@ async function startServer() {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
             const escapedCommand = command.replace(/"/g, '""');
-            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /s /c ""${escapedCommand}""`;
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
@@ -248,11 +250,11 @@ async function startServer() {
           }
         } catch (err: any) {
           const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-          const detailedError = cleanOutput(rawError) || 'Erro desconhecido';
+          const cleaned = cleanOutput(rawError);
           return { 
             host, 
             status: 'failed', 
-            output: `Erro de execução remota:\n${detailedError}`
+            output: cleaned || rawError || 'Erro desconhecido durante execução remota'
           };
         }
       }));
@@ -265,17 +267,30 @@ async function startServer() {
 
   // Helper para limpar logs de header de ferramentas como PsExec
   function cleanOutput(raw: string): string {
+    const bannerKeywords = [
+      'PsExec v',
+      'Sysinternals - www.sysinternals.com',
+      'Copyright (C)',
+      'Starting PsExec service on',
+      'Connecting with PsExec service on',
+      'PsExec service on',
+      'Connecting to',
+      'Starting cmd on',
+      'Copying authentication key to',
+      'exited on',
+      'with error code'
+    ];
+
     return raw.split('\n').filter(line => {
       const l = line.trim();
       if (!l) return false;
-      if (l.includes('PsExec v')) return false;
-      if (l.includes('Sysinternals - www.sysinternals.com')) return false;
-      if (l.includes('Copyright (C)')) return false;
-      if (l.includes('Starting PsExec service on')) return false;
-      if (l.includes('Connecting with Sysinternals Svc on')) return false;
       
-      // Prompt removal
+      // Remove se a linha contiver qualquer keyword de banner
+      if (bannerKeywords.some(kw => l.includes(kw))) return false;
+      
+      // Prompt removal (e.g., C:\> or C:\Windows\system32>)
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
+      
       return true;
     }).join('\n').trim();
   }
