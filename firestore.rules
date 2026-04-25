@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Machines collection
+    match /machines/{machineId} {
+      allow read: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.name is string && request.resource.data.name.size() > 0
+        && request.resource.data.ip is string && request.resource.data.ip.size() > 0;
+
+      allow update: if isSignedIn() 
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId; // Immutable owner
+
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // Credentials collection (One doc per user usually)
+    match /credentials/{credId} {
+      allow read: if isOwner(credId);
+      
+      allow create: if isOwner(credId)
+        && request.resource.data.username is string
+        && request.resource.data.password is string
+        && request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isOwner(credId)
+        && request.resource.data.ownerId == request.auth.uid;
+
+      allow delete: if isOwner(credId);
+    }
+  }
+}

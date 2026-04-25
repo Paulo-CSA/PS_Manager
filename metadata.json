@@ -1,0 +1,6 @@
+{
+  "name": "PsManager Pro",
+  "description": "Gerenciador remoto de máquinas com integração PsExec, monitoramento de status e comandos em massa.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
