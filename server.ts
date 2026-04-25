@@ -35,9 +35,25 @@ async function writeDb(data: any) {
 }
 
 import { exec } from 'child_process';
-import { promisify } from 'util';
+import iconv from 'iconv-lite';
 
-const execAsync = promisify(exec);
+// Helper customizado para lidar com encoding CP850 (Windows)
+async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, stderr: string }> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 2 * 1024 * 1024 }, (error: any, stdout, stderr) => {
+      // Usamos CP850 para suportar acentos do CMD brasileiro
+      const outStr = iconv.decode(stdout as Buffer, 'cp850');
+      const errStr = iconv.decode(stderr as Buffer, 'cp850');
+      
+      if (error) {
+        error.stdout = outStr;
+        error.stderr = errStr;
+        return reject(error);
+      }
+      resolve({ stdout: outStr, stderr: errStr });
+    });
+  });
+}
 
 async function startServer() {
   const app = express();
@@ -171,7 +187,7 @@ async function startServer() {
       const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${scriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
-      const { stdout, stderr } = await execAsync(runCmd, { timeout: 120000 });
+      const { stdout, stderr } = await execWin(runCmd, 120000);
       
       const rawOutput = (stdout || '') + (stderr || '');
       const output = cleanOutput(rawOutput);
@@ -213,10 +229,7 @@ async function startServer() {
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
-      const { stdout, stderr } = await execAsync(fullCmd, { 
-        timeout: 45000,
-        maxBuffer: 1024 * 1024 // Aumentado para 1MB
-      });
+      const { stdout, stderr } = await execWin(fullCmd, 45000);
 
       const rawOutput = (stdout || '') + (stderr || '');
       const output = cleanOutput(rawOutput) || 'Comando executado com sucesso (sem retorno).';
@@ -247,10 +260,7 @@ async function startServer() {
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
-            const { stdout, stderr } = await execAsync(fullCmd, { 
-              timeout: 60000,
-              maxBuffer: 1024 * 1024 
-            });
+            const { stdout, stderr } = await execWin(fullCmd, 60000);
             
             const rawOutput = (stdout || '') + (stderr || '');
             const cleaned = cleanOutput(rawOutput);
@@ -258,7 +268,7 @@ async function startServer() {
             return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
           } else {
             // Local fallback
-            const { stdout, stderr } = await execAsync(command);
+            const { stdout, stderr } = await execWin(command);
             return { host, status: 'success', output: stdout + stderr };
           }
         } catch (err: any) {
@@ -290,7 +300,7 @@ async function startServer() {
       'Connecting to',
       'Starting cmd on',
       'Copying authentication key to',
-      'exited on',
+      'exited on', 
       'with error code',
       'cmd exited on'
     ];
@@ -300,11 +310,26 @@ async function startServer() {
       const l = line.trim();
       if (!l) return false;
       
-      // Remove se a linha contiver qualquer keyword de banner (ignorando case para ser mais robusto)
-      if (bannerKeywords.some(kw => l.toLowerCase().includes(kw.toLowerCase()))) return false;
-      
       // Prompt removal (e.g., C:\> or C:\Windows\system32>)
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
+
+      // Banner filtering
+      // Só removemos se a linha PARECER um banner, não se contiver apenas a palavra
+      // Se a linha for idêntica a um keyword ou começar com ele (comum para headers)
+      // Mas permitimos se a linha tiver dados úteis e apenas contiver a palavra (raro em banners)
+      const isBanner = bannerKeywords.some(kw => {
+        const lowerL = l.toLowerCase();
+        const lowerKw = kw.toLowerCase();
+        // Se a linha começa com o banner (PsExec v, Connecting to...)
+        if (lowerL.startsWith(lowerKw)) return true;
+        // Se a linha contém Copyright ou Sysinternals (geralmente banners inteiros)
+        if (lowerKw.includes('copyright') || lowerKw.includes('sysinternals')) {
+            if (lowerL.includes(lowerKw)) return true;
+        }
+        return false;
+      });
+
+      if (isBanner) return false;
       
       return true;
     });
