@@ -60,7 +60,14 @@ async function startServer() {
   const port = Number(process.env.PORT) || 3000;
 
   app.use(cors());
-  app.use(bodyParser.json());
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.text({ limit: '1mb' }));
+
+  // Request logger
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+  });
 
   // --- Persistent Storage API ---
   app.get('/api/data', async (req, res) => {
@@ -179,23 +186,42 @@ async function startServer() {
       return res.status(404).json({ error: 'Script não encontrado no servidor' });
     }
 
+    // Criamos uma cópia temporária do script para injetar o comando de autodeleção
+    const tempScriptName = `tmp_${Date.now()}_${scriptName}`;
+    const tempScriptPath = path.join(SCRIPTS_DIR, tempScriptName);
+
     try {
       const { username, password } = creds;
       
+      // Lemos o conteúdo original e injetamos o comando de auto-exclusão do Windows Batch
+      // O comando (goto) 2>nul & del "%~f0" é um truque clássico para um .bat se deletar
+      const originalContent = fs.readFileSync(scriptPath, 'utf-8');
+      const modifiedContent = originalContent + '\r\n\r\nREM Auto-cleanup\r\n(goto) 2>nul & del "%~f0"\r\n';
+      fs.writeFileSync(tempScriptPath, modifiedContent);
+
       // No Windows nativo, psexec -c lida com o upload e execução em um passo só
-      // Adicionamos -f para forçar o backup/copy se já existir e -i se puder ser interativo
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${scriptPath}"`;
+      // Adicionamos -f para forçar o backup/copy se já existir
+      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${tempScriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
       const { stdout, stderr } = await execWin(runCmd, 120000);
       
       const rawOutput = (stdout || '') + (stderr || '');
       const output = cleanOutput(rawOutput);
-      res.json({ output: output || 'Script executado com sucesso.' });
+      res.json({ output: output || 'Script executado com sucesso e removido da máquina de destino.' });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       const cleaned = cleanOutput(rawError);
       res.status(500).json({ error: cleaned || rawError || 'Erro ao executar script' });
+    } finally {
+      // Cleanup do arquivo temporário no servidor
+      try {
+        if (fs.existsSync(tempScriptPath)) {
+          fs.unlinkSync(tempScriptPath);
+        }
+      } catch (cleanupErr) {
+        console.error('Erro ao limpar script temporário local:', cleanupErr);
+      }
     }
   });
 
