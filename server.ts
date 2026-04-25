@@ -107,6 +107,46 @@ async function startServer() {
     }
   });
 
+  app.post('/api/shell', async (req, res) => {
+    const { host, command } = req.body;
+    const db = await readDb();
+    const machine = db.machines.find((m: any) => m.host === host);
+
+    if (!machine) {
+      return res.status(404).json({ error: 'Host não encontrado na base de dados' });
+    }
+
+    const { username, password } = machine;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Credenciais não configuradas para este host' });
+    }
+
+    const wmiBase = '/root/.local/bin/wmiexec.py';
+
+    try {
+      // Usamos aspas simples ao redor do comando para evitar que o Linux interprete o '$' do PowerShell/CMD
+      const shellEscapedCommand = command.replace(/'/g, "'\\''");
+      const fullCmd = `${wmiBase} "${username}:${password}@${host}" '${shellEscapedCommand}'`;
+      
+      console.log(`[SHELL] ${fullCmd}`);
+
+      const { stdout, stderr } = await execAsync(fullCmd, { 
+        timeout: 30000,
+        maxBuffer: 1024 * 512 
+      });
+
+      const rawOutput = (stdout || '') + (stderr || '');
+      const output = cleanImpacketOutput(rawOutput) || 'Comando executado.';
+
+      res.json({ output });
+    } catch (err: any) {
+      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
+      const detailedError = cleanImpacketOutput(rawError) || 'Erro na conexão WMI';
+      // Mesmo com erro, se houver output útil (como resultado de um comando que retornou exit code != 0), enviamos
+      res.status(500).json({ error: detailedError });
+    }
+  });
+
   app.post('/api/exec', async (req, res) => {
     const { hosts, command, username, password } = req.body;
     if (!hosts || !command) return res.status(400).json({ error: 'Dados incompletos' });
