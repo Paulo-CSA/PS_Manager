@@ -361,7 +361,7 @@ const App = () => {
             <Cpu className="text-white" size={24} />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight leading-none">PS_MANAGER</h1>
+            <h1 className="text-lg font-bold tracking-tight leading-none">PC_MANAGER</h1>
             <span className="text-[10px] text-blue-500 font-mono uppercase tracking-[0.2em]">Remote Control v1.0</span>
           </div>
         </div>
