@@ -136,7 +136,8 @@ async function startServer() {
                 // O psexec.py as vezes prefere '/' em vez de '\' para domínio/usuário no Linux
                 // E precisamos garantir que as aspas não quebrem o shell
                 const safeCreds = `${username}:${password}@${host}`;
-                const fullCmd = `${base} "${safeCreds}" "${command}"`;
+                const safeCommand = command.replace(/"/g, '\\"');
+                const fullCmd = `${base} "${safeCreds}" "${safeCommand}"`;
                 
                 console.log(`[DEBUG] Tentando: ${fullCmd}`);
 

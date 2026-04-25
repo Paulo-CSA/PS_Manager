@@ -33,6 +33,8 @@ const App = () => {
   const [log, setLog] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'config'>('dashboard');
   
+  const [statusFilter, setStatusFilter] = useState<'all' | 'online'>('all');
+  
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isExecModalOpen, setIsExecModalOpen] = useState(false);
@@ -255,11 +257,20 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    const results = await executeRemote('wmic product get name', [host]);
+    const results = await executeRemote('powershell "Get-WmiObject -Class Win32_Product | Select-Object Name"', [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
-      const apps = results[0].output.split('\n').filter((a: string) => !a.includes('[') && a.trim() && !a.includes('Name'));
+      // Remove o cabeçalho e linhas vazias do PowerShell
+      const apps = results[0].output.split('\n')
+        .map((a: string) => a.trim())
+        .filter((a: string) => 
+          a && 
+          !a.includes('Name') && 
+          !a.includes('----') &&
+          !a.includes('[') &&
+          !a.startsWith('Success')
+        );
       setInstalledApps(apps);
       setIsAppModalOpen(true);
     }
@@ -268,7 +279,8 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    await executeRemote(`wmic product where "name='${appName.trim()}'" call uninstall`, [host]);
+    // Comando via PowerShell para desinstalação
+    await executeRemote(`powershell "(Get-WmiObject -Class Win32_Product -Filter \\"Name = '${appName.trim()}'\\").Uninstall()"`, [host]);
     setIsAppModalOpen(false);
   };
 
@@ -401,9 +413,26 @@ const App = () => {
             <>
               {/* Machine Bar */}
               <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold tracking-tight">Gerenciador de Hosts</h2>
-                  <p className="text-sm text-gray-500">{selectedHosts.length} hosts selecionados para ação em massa.</p>
+                <div className="flex items-center gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold tracking-tight">Gerenciador de Hosts</h2>
+                    <p className="text-sm text-gray-500">{selectedHosts.length} hosts selecionados para ação em massa.</p>
+                  </div>
+                  
+                  <div className="flex bg-[#1A1B1E] rounded-lg p-1 border border-white/5 ml-4">
+                    <button 
+                      onClick={() => setStatusFilter('all')}
+                      className={`px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all ${statusFilter === 'all' ? 'bg-white text-black' : 'text-gray-500 hover:text-white'}`}
+                    >
+                      Todos
+                    </button>
+                    <button 
+                      onClick={() => setStatusFilter('online')}
+                      className={`px-3 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all ${statusFilter === 'online' ? 'bg-emerald-500 text-white' : 'text-gray-500 hover:text-emerald-500'}`}
+                    >
+                      Online
+                    </button>
+                  </div>
                 </div>
                 <button 
                   onClick={() => setIsAddModalOpen(true)}
@@ -436,7 +465,9 @@ const App = () => {
                       <Monitor size={48} className="mx-auto mb-4 opacity-20" />
                       <p>Nenhuma máquina cadastrada no sistema.</p>
                     </div>
-                  ) : machines.map(m => (
+                  ) : machines
+                    .filter(m => statusFilter === 'all' || m.status === 'online')
+                    .map(m => (
                     <div key={m.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-white/[0.02] transition-colors">
                       <div className="col-span-1 flex items-center justify-center">
                         <input 
