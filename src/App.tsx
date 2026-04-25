@@ -46,6 +46,9 @@ const App = () => {
   const [ipConfig, setIpConfig] = useState({ ip: '', mask: '255.255.255.0', gw: '' });
   const [installedApps, setInstalledApps] = useState<string[]>([]);
   const [tempExecHost, setTempExecHost] = useState<string[] | null>(null);
+  
+  // Guard to prevent initial save loop
+  const isInitialized = useRef(false);
 
   // Load data from Server
   useEffect(() => {
@@ -70,22 +73,35 @@ const App = () => {
 
   // Save machines to Server whenever they change
   useEffect(() => {
-    if (loading) return;
-    fetch('/api/machines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ machines })
-    });
+    if (loading || !isInitialized.current) {
+      if (!loading) isInitialized.current = true;
+      return;
+    }
+    
+    const timeoutId = setTimeout(() => {
+      fetch('/api/machines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machines })
+      });
+    }, 500); // Small debounce
+
+    return () => clearTimeout(timeoutId);
   }, [machines, loading]);
 
   // Save credentials to Server whenever they change
   useEffect(() => {
-    if (loading) return;
-    fetch('/api/credentials', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ credentials: creds })
-    });
+    if (loading || !isInitialized.current) return;
+    
+    const timeoutId = setTimeout(() => {
+      fetch('/api/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credentials: creds })
+      });
+    }, 500); // Small debounce
+
+    return () => clearTimeout(timeoutId);
   }, [creds, loading]);
 
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

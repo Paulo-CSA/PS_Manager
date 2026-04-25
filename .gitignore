@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+server_storage/
+.server_storage/
