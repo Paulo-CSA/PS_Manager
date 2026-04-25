@@ -356,16 +356,17 @@ const App = () => {
       const apps = results[0].output.split('\n')
         .map((a: string) => a.trim())
         .filter((a: string) => 
-          a && 
+          a.length > 2 && 
           !a.includes('Name') && 
           !a.includes('----') &&
           !a.includes('[') &&
           !a.startsWith('Success') &&
-          !a.includes('PsExec') &&
-          !a.includes('Connecting') &&
-          !a.includes('Starting') &&
-          !a.includes('Copying') &&
-          !a.includes('exited on')
+          // Filtros mais específicos usando regex para não remover apps legítimos que contenham essas palavras
+          !/PsExec v/i.test(a) &&
+          !/Starting [^ ]+ on/i.test(a) &&
+          !/Connecting to/i.test(a) &&
+          !/Copying authentication/i.test(a) &&
+          !/exited on .* with error/i.test(a)
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);

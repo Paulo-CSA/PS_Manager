@@ -315,7 +315,7 @@ async function startServer() {
       'PsExec v[0-9.]+',
       'Sysinternals - www.sysinternals.com',
       'Copyright \\(C\\) [0-9-]+ Mark Russinovich',
-      'Starting PsExec service on [0-9.]+',
+      'Starting [^ ]+(?: service)? on [0-9.]+',
       'Connecting with PsExec service on [0-9.]+',
       'PsExec service on [0-9.]+',
       'Connecting to [0-9.]+',
@@ -323,17 +323,19 @@ async function startServer() {
       'Copying authentication key to [0-9.]+',
       'exited on [0-9.]+ with error code [0-9]+',
       'cmd exited on [0-9.]+',
-      'PsExec could not start [^ ]+ on [0-9.]+'
+      'PsExec could not start [^ ]+ on [0-9.]+',
+      'PSEXESVC'
     ];
 
     // 1. Remove caracteres nulos e outros ruídos binários comuns em pipes do Windows
     let cleaned = raw.replace(/\0/g, '');
 
-    // 2. Remove frases de banner específicas (mesmo que estejam no meio de texto)
+    // 2. Remove frases de banner específicas (mesmo que estejam no meio de texto ou coladas)
     bannerKeywords.forEach(kw => {
-      // Adicionamos \.* para pegar os "..." no final e fazemos global/insensitive
+      // Usamos [\\s.]* para pegar os "..." no final e fazemos global/insensitive
+      // Adicionamos Word Boundary ou permitimos que pegue pedaços colados
       const regex = new RegExp(kw + '[\\s.]*', 'gi');
-      cleaned = cleaned.replace(regex, '');
+      cleaned = cleaned.replace(regex, '\n'); // Substitui por newline para garantir separação
     });
 
     // 3. Processamento por linha para remover prompts e linhas vazias
@@ -344,6 +346,9 @@ async function startServer() {
       
       // Prompt removal (e.g., C:\> or C:\Windows\system32>)
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
+      
+      // Se a linha resultante for apenas ruído de shell
+      if (l.toLowerCase() === 'cmd' || l.toLowerCase() === 'powershell') return false;
       
       return true;
     });
