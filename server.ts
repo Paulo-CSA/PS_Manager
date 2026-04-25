@@ -168,21 +168,23 @@ async function startServer() {
       
       // 1. Garantir que o diretório C:\PCManager existe via wmiexec
       const mkdirCmd = `/root/.local/bin/wmiexec.py "${username}:${password}@${host}" "if not exist C:\\PCManager mkdir C:\\PCManager"`;
-      await execAsync(mkdirCmd, { timeout: 15000 }).catch(() => {}); // Ignora erro se já existir ou falha simples
+      await execAsync(mkdirCmd, { timeout: 15000 }).catch(() => {}); 
 
-      // 2. Usar psexec.py com a flag -c para fazer o upload e executar
-      // O psexec.py -c carrega o arquivo local para o alvo e o executa.
-      // No entanto, para persistir na pasta C:\PCManager como pedido, faremos um pouco diferente:
-      // Como o psexec -c remove após executar, vamos usar smbclient ou similar se precisarmos de persistência manual.
-      // Mas para simplificar e garantir a execução:
-      const psexecPath = '/root/.local/bin/psexec.py';
-      const execCmd = `${psexecPath} "${username}:${password}@${host}" -c "${scriptPath}"`;
+      // 2. Upload do arquivo via smbclient.py para C:\PCManager\
+      const smbclientPath = '/root/.local/bin/smbclient.py';
+      const uploadCmd = `${smbclientPath} "${username}:${password}@${host}" -c "use C$; cd PCManager; put ${scriptPath}; exit"`;
+      console.log(`[SCRIPT_UPLOAD] ${uploadCmd}`);
+      await execAsync(uploadCmd, { timeout: 30000 });
+
+      // 3. Executar o script via wmiexec
+      const wmiPath = '/root/.local/bin/wmiexec.py';
+      const runCmd = `${wmiPath} "${username}:${password}@${host}" "C:\\PCManager\\${scriptName}"`;
       
-      console.log(`[SCRIPT_EXEC] ${execCmd}`);
-      const { stdout, stderr } = await execAsync(execCmd, { timeout: 120000 });
+      console.log(`[SCRIPT_EXEC] ${runCmd}`);
+      const { stdout, stderr } = await execAsync(runCmd, { timeout: 120000 });
       
       const output = cleanImpacketOutput(stdout + stderr);
-      res.json({ output: output || 'Script executado com sucesso.' });
+      res.json({ output: output || 'Script executado com sucesso e salvo em C:\\PCManager.' });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       res.status(500).json({ error: cleanImpacketOutput(rawError) || 'Erro ao executar script' });
