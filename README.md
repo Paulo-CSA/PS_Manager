@@ -13,10 +13,12 @@ Node.js
 6. npm install -g pm2
 7. npm install (dentro da pasta do projeto)
 
-netstat -ano | findstr :3000
-tasklist | findstr 1234
-
+0. INICIAR
 Run the app: start /B npm run dev
 
+01. FECHAR
+netstat -ano | findstr :3000
+
+tasklist | findstr 1234
 
 
