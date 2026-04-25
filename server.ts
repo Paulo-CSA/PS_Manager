@@ -133,8 +133,9 @@ async function startServer() {
 
             for (const base of possibleCmds) {
               try {
-                // Quotes around credentials to handle slashes/special chars
-                const fullCmd = `${base} "${username}:${password}@${host}" ${command}`;
+                // Usamos aspas simples ao redor do comando para evitar que o Linux interprete o '$' do PowerShell
+                const escapedCommand = command.replace(/'/g, "'\\''");
+                const fullCmd = `${base} "${username}:${password}@${host}" '${escapedCommand}'`;
                 
                 console.log(`[EXEC] ${fullCmd}`);
 
