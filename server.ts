@@ -198,9 +198,10 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // No Windows, escapamos as aspas duplas se existirem no comando
+      // No Windows, usamos o padrão cmd /s /c e envolvemos o comando em aspas extras 
+      // para que o CMD não interprete erroneamente pipes (|) ou aspas aninhadas.
       const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /s /c ""${escapedCommand}""`;
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
@@ -229,7 +230,7 @@ async function startServer() {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
             const escapedCommand = command.replace(/"/g, '""');
-            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /s /c ""${escapedCommand}""`;
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
@@ -272,9 +273,12 @@ async function startServer() {
       'Copyright (C)',
       'Starting PsExec service on',
       'Connecting with PsExec service on',
+      'PsExec service on',
       'Connecting to',
       'Starting cmd on',
-      'Copying authentication key to'
+      'Copying authentication key to',
+      'exited on',
+      'with error code'
     ];
 
     return raw.split('\n').filter(line => {
