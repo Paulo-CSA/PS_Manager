@@ -47,16 +47,9 @@ const App = () => {
   const [isAppModalOpen, setIsAppModalOpen] = useState(false);
   const [isWaitModalOpen, setIsWaitModalOpen] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
-  const [isScriptManagerOpen, setIsScriptManagerOpen] = useState(false);
-  const [isRunScriptModalOpen, setIsRunScriptModalOpen] = useState(false);
-  const [scripts, setScripts] = useState<string[]>([]);
-  const [scriptToRun, setScriptToRun] = useState<string | null>(null);
-  const [scriptTargetHosts, setScriptTargetHosts] = useState<string[]>([]);
-  
   const [terminalHost, setTerminalHost] = useState<string | null>(null);
   const [terminalLog, setTerminalLog] = useState<{ type: 'in' | 'out', text: string }[]>([]);
   const [terminalLoading, setTerminalLoading] = useState(false);
-  
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -64,6 +57,21 @@ const App = () => {
       terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [terminalLog, isTerminalOpen]);
+
+  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
+  const [consoleLog, setConsoleLog] = useState<{ type: 'system' | 'cmd' | 'result' | 'error', text: string, host?: string }[]>([]);
+  const consoleLogEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isConsoleOpen) {
+      consoleLogEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [consoleLog, isConsoleOpen]);
+
+  const addConsoleEntry = (entry: { type: 'system' | 'cmd' | 'result' | 'error', text: string, host?: string }) => {
+    setConsoleLog(prev => [...prev, entry]);
+    setLog(prev => [...prev, `[${entry.type.toUpperCase()}] ${entry.host ? `[${entry.host}] ` : ''}${entry.text}`]);
+  };
 
   // Forms
   const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
@@ -275,6 +283,7 @@ const App = () => {
     if (machines.length === 0) return;
     const hosts = machines.map(m => m.ip);
     setLog(prev => [...prev, `[SYSTEM] Verificando conectividade via porta 445 (SMB) em ${hosts.length} hosts...`]);
+    addConsoleEntry({ type: 'system', text: `Iniciando verificação de rede em ${hosts.length} máquinas...` });
     
     try {
       const res = await fetch('/api/ping', {
@@ -287,6 +296,7 @@ const App = () => {
       results.forEach((r: any) => {
         const icon = r.alive ? '✅' : '❌';
         setLog(prev => [...prev, `[PING] ${r.host} está ${r.alive ? 'ONLINE' : 'OFFLINE'} ${icon}`]);
+        addConsoleEntry({ type: 'result', host: r.host, text: `Status: ${r.alive ? 'ONLINE' : 'OFFLINE'}` });
       });
 
       setMachines(prev => prev.map(m => {
@@ -314,7 +324,8 @@ const App = () => {
     }
 
     setLog(prev => [...prev, `[CMD] Executando: "${command}" em ${targets.length} hosts...`]);
-    setLog(prev => [...prev, `[INFO] Dica: Se falhar com '\', tente o formato 'dominio/usuario' nas credenciais.`]);
+    addConsoleEntry({ type: 'cmd', text: command, host: targets.join(', ') });
+    setIsConsoleOpen(true); // Open console automatically to show output
     
     try {
       const res = await fetch('/api/exec', {
@@ -331,10 +342,16 @@ const App = () => {
       
       results.forEach((r: any) => {
         setLog(prev => [...prev, `[${r.host}] ${r.status.toUpperCase()}: ${r.output}`]);
+        addConsoleEntry({ 
+          type: r.status === 'success' ? 'result' : 'error', 
+          host: r.host, 
+          text: r.output 
+        });
       });
       return results;
     } catch (err) {
       setLog(prev => [...prev, `[ERROR] Falha na execução remota.`]);
+      addConsoleEntry({ type: 'error', text: 'Falha crítica na comunicação com o servidor API.' });
       return null;
     }
   };
@@ -752,20 +769,28 @@ const App = () => {
               </div>
 
               {/* Console Output */}
-              <div className="bg-[#111] rounded-2xl border border-white/5 p-4 shadow-inner overflow-hidden flex flex-col h-[300px]">
-                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-white/5">
-                  <Terminal size={14} className="text-gray-500" />
-                  <span className="text-[10px] font-mono uppercase text-gray-500 tracking-widest">Saída do Console</span>
+              <div className="bg-[#111] rounded-2xl border border-white/5 p-4 shadow-inner overflow-hidden flex flex-col h-[300px] relative group">
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5">
+                  <div className="flex items-center gap-2">
+                    <Terminal size={14} className="text-gray-500" />
+                    <span className="text-[10px] font-mono uppercase text-gray-500 tracking-widest">Saída do Console</span>
+                  </div>
+                  <button 
+                    onClick={() => setIsConsoleOpen(true)}
+                    className="text-[10px] bg-blue-600/10 text-blue-500 px-2 py-0.5 rounded border border-blue-600/20 hover:bg-blue-600 hover:text-white transition-all cursor-pointer"
+                  >
+                    ABRIR TERMINAL CHEIO
+                  </button>
                 </div>
-                <div className="flex-1 overflow-y-auto font-mono text-xs space-y-1 text-blue-300/80 p-2">
+                <div className="flex-1 overflow-y-auto font-mono text-[11px] space-y-1 text-blue-300/80 p-2 scrollbar-thin scrollbar-thumb-white/10">
                   {log.map((line, i) => (
                     <div key={i} className="flex gap-2">
-                      <span className="opacity-30 select-none">{i + 1}</span>
-                      <span>{line}</span>
+                      <span className="opacity-20 select-none text-[9px] w-6 text-right font-mono">{i + 1}</span>
+                      <span className="whitespace-pre-wrap">{line}</span>
                     </div>
                   ))}
                   {log.length === 0 && <span className="text-gray-700 italic">Pronto para execução...</span>}
-                  <div id="anchor" />
+                  <div ref={consoleLogEndRef} id="anchor" />
                 </div>
               </div>
             </>
@@ -1382,6 +1407,104 @@ const App = () => {
                     <span className="px-1.5 py-0.5 border border-white/10 rounded">ENTER</span>
                   </div>
                 </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Console Output Modal - Full View */}
+      <AnimatePresence>
+        {isConsoleOpen && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="w-full max-w-6xl h-[90vh] bg-[#0A0A0B] border border-white/10 rounded-2xl shadow-3xl overflow-hidden flex flex-col"
+            >
+              <div className="bg-[#111113] px-6 py-5 border-b border-white/5 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-600/10 text-blue-500 rounded-xl flex items-center justify-center border border-blue-600/20 shadow-lg shadow-blue-900/10">
+                    <Terminal size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold tracking-tight">TERMINAL_DEBUG</h2>
+                    <p className="text-xs text-gray-500 font-mono tracking-widest uppercase">Saída bruta PsExec/CMD</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setConsoleLog([])}
+                    className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-mono transition-all text-gray-400 hover:text-white uppercase tracking-tighter"
+                  >
+                    Clear_History
+                  </button>
+                  <button 
+                    onClick={() => setIsConsoleOpen(false)}
+                    className="p-2 hover:bg-red-600/20 text-gray-500 hover:text-red-500 rounded-lg transition-all"
+                  >
+                    <XCircle size={24} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 bg-black p-8 overflow-y-auto font-mono text-[13px] leading-relaxed relative">
+                <div className="space-y-6 max-w-full">
+                  {consoleLog.length === 0 && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-800 space-y-4">
+                      <Activity size={64} className="opacity-10 animate-pulse" />
+                      <p className="text-[10px] uppercase font-bold tracking-[0.4em] opacity-30">Waiting for remote execution results...</p>
+                    </div>
+                  )}
+                  {consoleLog.map((entry, i) => (
+                    <div key={i} className="group animate-in fade-in duration-500">
+                      <div className="flex items-center gap-3 mb-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                        <span className={`text-[9px] px-2 py-0.5 rounded-sm font-bold tracking-widest ${
+                          entry.type === 'system' ? 'bg-gray-800 text-gray-400' :
+                          entry.type === 'cmd' ? 'bg-blue-600/20 text-blue-400' :
+                          entry.type === 'result' ? 'bg-emerald-600/20 text-emerald-400' :
+                          'bg-red-600/20 text-red-500'
+                        }`}>
+                          {entry.type.toUpperCase()}
+                        </span>
+                        <span className="text-[9px] text-gray-600">[{new Date().toLocaleTimeString()}]</span>
+                        {entry.host && <span className="text-[9px] text-blue-500 font-bold tracking-widest">@{entry.host}</span>}
+                      </div>
+
+                      <div className={`p-5 rounded-2xl border font-mono whitespace-pre-wrap break-all transition-all shadow-lg ${
+                        entry.type === 'cmd' ? 'bg-[#151619] border-white/10 text-white font-bold' :
+                        entry.type === 'result' ? 'bg-[#000] border-emerald-500/20 text-emerald-400/90' :
+                        entry.type === 'error' ? 'bg-red-950/20 border-red-500/20 text-red-400' :
+                        'bg-transparent border-transparent text-gray-600 italic border-l-gray-800'
+                      }`}>
+                        {entry.text}
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={consoleLogEndRef} />
+                </div>
+              </div>
+              
+              <div className="p-6 bg-[#0D0D0E] border-t border-white/5">
+                <div className="max-w-4xl mx-auto flex items-center bg-black border border-white/10 rounded-2xl px-5 focus-within:border-blue-500/50 focus-within:shadow-[0_0_20px_rgba(59,130,246,0.1)] transition-all">
+                  <Terminal size={18} className="text-gray-600 mr-4 shrink-0" />
+                  <input 
+                    type="text" 
+                    placeholder="DIGITE UM COMANDO PARA EXECUTAR NOS HOSTS SELECIONADOS..." 
+                    className="flex-1 bg-transparent py-4 text-sm font-mono text-white placeholder:text-gray-700 focus:outline-none"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                        executeRemote(e.currentTarget.value);
+                        e.currentTarget.value = '';
+                      }
+                    }}
+                  />
+                  <div className="flex items-center gap-4 text-gray-700 ml-4 shrink-0 select-none">
+                    <div className="h-4 w-[1px] bg-white/10" />
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-blue-500/40">Remote_Exec</span>
+                  </div>
+                </div>
               </div>
             </motion.div>
           </div>
