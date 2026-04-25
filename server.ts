@@ -120,6 +120,7 @@ async function startServer() {
             // Tenta psexec.py, impacket-psexec ou via python3 -m
             // Para maior robustez, tentamos localizar o comando
             const possibleCmds = [
+              `/root/.local/bin/psexec.py`,
               `psexec.py`,
               `impacket-psexec`,
               `/usr/local/bin/psexec.py`,
