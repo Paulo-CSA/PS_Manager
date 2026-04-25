@@ -46,6 +46,11 @@ const App = () => {
   const [isIPModalOpen, setIsIPModalOpen] = useState(false);
   const [isAppModalOpen, setIsAppModalOpen] = useState(false);
   const [isWaitModalOpen, setIsWaitModalOpen] = useState(false);
+  const [isScriptManagerOpen, setIsScriptManagerOpen] = useState(false);
+  const [isRunScriptModalOpen, setIsRunScriptModalOpen] = useState(false);
+  const [scripts, setScripts] = useState<string[]>([]);
+  const [scriptToRun, setScriptToRun] = useState<string | null>(null);
+  const [scriptTargetHosts, setScriptTargetHosts] = useState<string[]>([]);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [terminalHost, setTerminalHost] = useState<string | null>(null);
   const [terminalLog, setTerminalLog] = useState<{ type: 'in' | 'out', text: string }[]>([]);
