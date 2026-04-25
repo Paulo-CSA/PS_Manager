@@ -149,7 +149,20 @@ async function startServer() {
                   maxBuffer: 1024 * 1024 
                 });
                 
-                output = stdout || stderr || 'Executado com sucesso.';
+                let rawOutput = stdout || stderr || '';
+                
+                // Filtra o output para remover banners e logs do Impacket
+                const cleanOutput = rawOutput.split('\n').filter(line => {
+                  const l = line.trim();
+                  if (!l) return false;
+                  if (l.startsWith('Impacket v')) return false;
+                  if (l.startsWith('[*]')) return false;
+                  if (l.startsWith('[+]')) return false;
+                  if (l.startsWith('Configuring service...')) return false;
+                  return true;
+                }).join('\n').trim();
+
+                output = cleanOutput || 'Executado com sucesso.';
                 success = true;
                 break;
               } catch (err: any) {
