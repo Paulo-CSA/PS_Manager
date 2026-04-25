@@ -144,7 +144,9 @@ async function startServer() {
                 });
                 
                 const rawOutput = (stdout || '') + (stderr || '');
-                output = cleanImpacketOutput(rawOutput) || 'Executado com sucesso.';
+                const cleaned = cleanImpacketOutput(rawOutput);
+                
+                output = cleaned || 'Executado com sucesso.';
                 success = true;
                 break;
               } catch (err: any) {
@@ -154,8 +156,11 @@ async function startServer() {
                 const rawOutput = (err.stdout || '') + (err.stderr || '');
                 const cleaned = cleanImpacketOutput(rawOutput);
                 
-                // Se temos algum conteúdo útil (mesmo com erro de pipe), consideramos "sucesso parcial"
-                if (cleaned && !cleaned.includes('Something wen\'t wrong connecting the pipes')) {
+                // Se o erro for de rede/SMB (STATUS_REQUEST_NOT_ACCEPTED), não devemos considerar sucesso
+                const isSmbError = rawOutput.includes('SMB SessionError') || rawOutput.includes('STATUS_REQUEST_NOT_ACCEPTED');
+
+                // Se temos conteúdo útil e NÃO é um erro fatal de SMB, tentamos extrair o que deu
+                if (cleaned && !isSmbError && !cleaned.includes('Something wen\'t wrong connecting the pipes')) {
                    output = cleaned;
                    success = true;
                    break;
@@ -166,6 +171,7 @@ async function startServer() {
                 }
                 
                 console.error(`Falha ao tentar ${base}:`, err.stderr || err.message);
+                // Se falhou por erro real (não "not found"), interrompe o loop e mostra o erro
                 break;
               }
             }
@@ -173,8 +179,9 @@ async function startServer() {
             if (success) {
               return { host, status: 'success', output };
             } else {
-              // Retorna o stderr detalhado para que o usuário saiba por que o psexec falhou
-              const detailedError = cleanImpacketOutput(lastError?.stderr || lastError?.message || 'Erro desconhecido');
+              // Retorna o output detalhado para que o usuário saiba por que o psexec falhou
+              const rawError = (lastError?.stdout || '') + (lastError?.stderr || lastError?.message || '');
+              const detailedError = cleanImpacketOutput(rawError) || 'Erro desconhecido';
               return { 
                 host, 
                 status: 'failed', 
