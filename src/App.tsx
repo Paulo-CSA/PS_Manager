@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  auth, db, googleProvider, signInWithPopup, onAuthStateChanged, 
+  auth, db, googleProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, 
   collection, addDoc, deleteDoc, onSnapshot, query, where, doc, setDoc, getDoc, updateDoc,
   User 
 } from './firebase';
@@ -53,22 +53,25 @@ const App = () => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (!u) {
+        signInAnonymously(auth).catch(console.error);
+        return;
+      }
       setUser(u);
       setLoading(false);
-      if (u) {
-        // Load machines
-        const q = query(collection(db, 'machines'), where('ownerId', '==', u.uid));
-        const sub = onSnapshot(q, (snapshot) => {
-          setMachines(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Machine)));
-        });
+      
+      // Load machines
+      const q = query(collection(db, 'machines'), where('ownerId', '==', u.uid));
+      const sub = onSnapshot(q, (snapshot) => {
+        setMachines(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Machine)));
+      });
 
-        // Load credentials
-        getDoc(doc(db, 'credentials', u.uid)).then(d => {
-          if (d.exists()) setCreds(d.data());
-        });
+      // Load credentials
+      getDoc(doc(db, 'credentials', u.uid)).then(d => {
+        if (d.exists()) setCreds(d.data());
+      });
 
-        return () => sub();
-      }
+      return () => sub();
     });
     return () => unsubscribe();
   }, []);
@@ -237,31 +240,7 @@ const App = () => {
     setIsAppModalOpen(false);
   };
 
-  if (loading) return <div className="min-h-screen bg-[#111] flex items-center justify-center text-white font-mono">LOADING_SYSTEM...</div>;
-
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-[#050505] flex flex-col items-center justify-center p-4">
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full bg-[#151619] border border-white/10 rounded-2xl p-8 shadow-2xl text-center"
-        >
-          <div className="w-16 h-16 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
-            <Shield className="text-blue-500" size={32} />
-          </div>
-          <h1 className="text-3xl font-bold text-white mb-2 tracking-tight">PsManager Pro</h1>
-          <p className="text-gray-400 mb-8 font-light">Gerenciamento remoto seguro de infraestrutura crítica.</p>
-          <button 
-            onClick={login}
-            className="w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
-          >
-            Acessar com Google
-          </button>
-        </motion.div>
-      </div>
-    );
-  }
+  if (loading || !user) return <div className="min-h-screen bg-[#111] flex items-center justify-center text-white font-mono">LOADING_SYSTEM...</div>;
 
   return (
     <div className="min-h-screen bg-[#0A0A0B] text-[#E4E3E0] font-sans selection:bg-blue-500/30">
@@ -296,10 +275,11 @@ const App = () => {
           <div className="h-8 w-[1px] bg-white/10 mx-2" />
 
           <div className="flex items-center gap-3">
-            <img src={user.photoURL || ''} className="w-8 h-8 rounded-full border border-white/10" alt="user" />
-            <button onClick={logout} className="text-gray-400 hover:text-white transition-colors">
-              <LogOut size={18} />
-            </button>
+            {user.photoURL && <img src={user.photoURL} className="w-8 h-8 rounded-full border border-white/10" alt="user" />}
+            <div className="flex flex-col text-right">
+              <span className="text-[10px] text-gray-500 font-mono">ID_SESSIÃO</span>
+              <span className="text-xs font-mono text-blue-400">{user.uid.substring(0, 8)}...</span>
+            </div>
           </div>
         </div>
       </header>
