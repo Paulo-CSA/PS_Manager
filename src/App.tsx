@@ -349,7 +349,7 @@ const App = () => {
     setIsWaitModalOpen(true);
     
     // Comando PowerShell otimizado conforme sugestão do usuário
-    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { \\$_.DisplayName } | Select-Object -ExpandProperty DisplayName"`, [host]);
+    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName"`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
@@ -371,10 +371,8 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    
-    // Comando via PowerShell robusto com escape para shell Linux (\$ para evitar expansão indesejada)
-    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "\\$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { \\$_.DisplayName -like '${appName.trim()}*' } | Select-Object -First 1; if (\\$app) { \\$cmd = \\$app.QuietUninstallString; if (-not \\$cmd) { \\$cmd = \\$app.UninstallString }; Write-Output ('App encontrado: ' + \\$app.DisplayName); if (\\$cmd -match 'msiexec') { if (\\$cmd -match '{.*}') { \\$guid = \\$matches[0]; Start-Process msiexec.exe -ArgumentList '/x', \\$guid, '/quiet', '/norestart' -Wait } } elseif (\\$app.DisplayName -like '${appName.trim()}*') { Start-Process -FilePath \\$cmd -ArgumentList '/S' -Wait } else { \\$argsList = @('', '/quiet', '/S', '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'); foreach (\\$arg in \\$argsList) { try { Write-Output ('Tentando: ' + \\$cmd + ' ' + \\$arg); Start-Process -FilePath \\$cmd -ArgumentList \\$arg -Wait -ErrorAction Stop; break } catch {} } } }"`;
-    
+    // Comando via PowerShell otimizado
+    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace '/I', '/X'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
     await executeRemote(uninstallCmd, [host]);
     setIsAppModalOpen(false);
   };
