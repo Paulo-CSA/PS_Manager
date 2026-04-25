@@ -200,22 +200,10 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // Determinamos a melhor forma de chamar o comando
-      let fullCmd;
-      const lowerCmd = command.toLowerCase().trim();
-      
-      // No Windows, quando o comando tem caracteres especiais como pipes (|),
-      // precisamos garantir que o PsExec receba o bloco inteiro corretamente.
-      // A melhor prática com PsExec para comandos complexos é envolver o comando em aspas.
+      // No Windows, envolvemos o comando em aspas para o CMD
+      // Para comandos complexos (com pipes e aspas), o padrão cmd /c "comando" costuma ser o mais seguro
       const escapedCommand = command.replace(/"/g, '""');
-      
-      if (lowerCmd.startsWith('powershell')) {
-          // Se for powershell direto, passamos ele como o executável
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
-      } else {
-          // Se for comando variado, usamos o wrap do cmd /c
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-      }
+      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
@@ -243,16 +231,8 @@ async function startServer() {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            let fullCmd;
-            const lowerCmd = command.toLowerCase().trim();
-            
             const escapedCommand = command.replace(/"/g, '""');
-            
-            if (lowerCmd.startsWith('powershell')) {
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
-            } else {
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-            }
+            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 

@@ -348,8 +348,8 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    // Comando PowerShell otimizado conforme sugestão do usuário para garantir retorno formatado
-    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "$apps = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName; $apps -join '\`n'"`, [host]);
+    // Comando PowerShell otimizado para ser o mais simples possível via CMD/PsExec
+    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName"`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
