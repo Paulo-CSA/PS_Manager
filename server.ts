@@ -167,13 +167,15 @@ async function startServer() {
       const { username, password } = creds;
       
       // No Windows nativo, psexec -c lida com o upload e execução em um passo só
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -c "${scriptPath}"`;
+      // Adicionamos -f para forçar o backup/copy se já existir e -i se puder ser interativo
+      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${scriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
       const { stdout, stderr } = await execAsync(runCmd, { timeout: 120000 });
       
-      const output = cleanOutput(stdout + stderr);
-      res.json({ output: output || 'Script executado com sucesso e removido da máquina alvo.' });
+      const rawOutput = (stdout || '') + (stderr || '');
+      const output = cleanOutput(rawOutput);
+      res.json({ output: output || 'Script executado com sucesso.' });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       const cleaned = cleanOutput(rawError);
@@ -198,16 +200,22 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // No Windows, usamos o padrão cmd /s /c e envolvemos o comando em aspas extras 
-      // para que o CMD não interprete erroneamente pipes (|) ou aspas aninhadas.
-      const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /s /c ""${escapedCommand}""`;
+      // Determinamos a melhor forma de chamar o comando
+      let fullCmd;
+      if (command.toLowerCase().includes('powershell')) {
+          // Para powershell, evitamos o cmd /c se possível para não quebrar pipes
+          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
+      } else {
+          // No Windows, envolvemos o comando em aspas para o CMD
+          const escapedCommand = command.replace(/"/g, '""');
+          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+      }
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
       const { stdout, stderr } = await execAsync(fullCmd, { 
         timeout: 45000,
-        maxBuffer: 1024 * 512 
+        maxBuffer: 1024 * 1024 // Aumentado para 1MB
       });
 
       const rawOutput = (stdout || '') + (stderr || '');
@@ -229,8 +237,13 @@ async function startServer() {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            const escapedCommand = command.replace(/"/g, '""');
-            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /s /c ""${escapedCommand}""`;
+            let fullCmd;
+            if (command.toLowerCase().includes('powershell')) {
+                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
+            } else {
+                const escapedCommand = command.replace(/"/g, '""');
+                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
+            }
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
@@ -278,21 +291,25 @@ async function startServer() {
       'Starting cmd on',
       'Copying authentication key to',
       'exited on',
-      'with error code'
+      'with error code',
+      'cmd exited on'
     ];
 
-    return raw.split('\n').filter(line => {
+    const lines = raw.split(/\r?\n/);
+    const filtered = lines.filter(line => {
       const l = line.trim();
       if (!l) return false;
       
-      // Remove se a linha contiver qualquer keyword de banner
-      if (bannerKeywords.some(kw => l.includes(kw))) return false;
+      // Remove se a linha contiver qualquer keyword de banner (ignorando case para ser mais robusto)
+      if (bannerKeywords.some(kw => l.toLowerCase().includes(kw.toLowerCase()))) return false;
       
       // Prompt removal (e.g., C:\> or C:\Windows\system32>)
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
       
       return true;
-    }).join('\n').trim();
+    });
+
+    return filtered.join('\n').trim();
   }
 
   // Vite integration
