@@ -35,7 +35,7 @@ async function writeDb(data: any) {
 }
 
 import { exec } from 'child_process';
-import iconv from 'iconv-lite';
+import * as iconv from 'iconv-lite';
 
 // Helper customizado para lidar com encoding CP850 (Windows)
 async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, stderr: string }> {
