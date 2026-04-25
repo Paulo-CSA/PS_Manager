@@ -117,16 +117,45 @@ async function startServer() {
           let finalCmd = command;
           
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            // Usa psexec.py do Impacket para execução remota
-            finalCmd = `psexec.py "${username}:${password}@${host}" "${command}"`;
-          }
+            // Tenta psexec.py, impacket-psexec ou via python3 -m
+            // Para maior robustez, tentamos localizar o comando
+            const possibleCmds = [
+              `psexec.py`,
+              `impacket-psexec`,
+              `/usr/local/bin/psexec.py`,
+              `python3 -m impacket.examples.psexec`
+            ];
+            
+            let lastError = null;
+            let success = false;
+            let output = '';
 
-          const { stdout, stderr } = await execAsync(finalCmd, { timeout: 60000 });
-          return { 
-            host, 
-            status: 'success', 
-            output: stdout || stderr || 'Executado com sucesso.' 
-          };
+            for (const base of possibleCmds) {
+              try {
+                const fullCmd = `${base} "${username}:${password}@${host}" "${command}"`;
+                const { stdout, stderr } = await execAsync(fullCmd, { timeout: 60000 });
+                output = stdout || stderr || 'Executado com sucesso.';
+                success = true;
+                break;
+              } catch (err: any) {
+                lastError = err;
+                // Se o erro não for "not found", o psexec foi encontrado mas falhou a execução
+                if (!err.message.includes('not found')) {
+                   break;
+                }
+              }
+            }
+
+            if (success) {
+              return { host, status: 'success', output };
+            } else {
+              return { 
+                host, 
+                status: 'failed', 
+                output: `Erro de execução remota: ${lastError?.stderr || lastError?.message || 'Arquivo não encontrado'}`
+              };
+            }
+          }
         } catch (err: any) {
           return { 
             host, 
