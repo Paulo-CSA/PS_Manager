@@ -257,11 +257,10 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    const results = await executeRemote('powershell "Get-WmiObject -Class Win32_Product | Select-Object Name"', [host]);
+    const results = await executeRemote(`powershell -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -ne $null } | Select-Object -ExpandProperty DisplayName"`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
-      // Remove o cabeçalho e linhas vazias do PowerShell
       const apps = results[0].output.split('\n')
         .map((a: string) => a.trim())
         .filter((a: string) => 
@@ -271,7 +270,7 @@ const App = () => {
           !a.includes('[') &&
           !a.startsWith('Success')
         );
-      setInstalledApps(apps);
+      setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
     }
   };
@@ -279,8 +278,9 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    // Comando via PowerShell para desinstalação
-    await executeRemote(`powershell "(Get-WmiObject -Class Win32_Product -Filter \\"Name = '${appName.trim()}'\\").Uninstall()"`, [host]);
+    // Comando via PowerShell para desinstalação via DisplayName (UninstallString)
+    const uninstallCmd = `powershell -Command "$app = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { Start-Process cmd.exe -ArgumentList '/c', $app.UninstallString, '/quiet', '/norestart' -Wait }"`;
+    await executeRemote(uninstallCmd, [host]);
     setIsAppModalOpen(false);
   };
 
