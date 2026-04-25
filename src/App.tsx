@@ -221,6 +221,7 @@ const App = () => {
     }
 
     setLog(prev => [...prev, `[CMD] Executando: "${command}" em ${targets.length} hosts...`]);
+    setLog(prev => [...prev, `[INFO] Dica: Se falhar com '\', tente o formato 'dominio/usuario' nas credenciais.`]);
     
     try {
       const res = await fetch('/api/exec', {

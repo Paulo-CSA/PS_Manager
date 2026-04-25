@@ -133,27 +133,41 @@ async function startServer() {
 
             for (const base of possibleCmds) {
               try {
-                const fullCmd = `${base} "${username}:${password}@${host}" "${command}"`;
-                const { stdout, stderr } = await execAsync(fullCmd, { timeout: 60000 });
+                // O psexec.py as vezes prefere '/' em vez de '\' para domínio/usuário no Linux
+                // E precisamos garantir que as aspas não quebrem o shell
+                const safeCreds = `${username}:${password}@${host}`;
+                const fullCmd = `${base} "${safeCreds}" "${command}"`;
+                
+                console.log(`[DEBUG] Tentando: ${fullCmd}`);
+
+                const { stdout, stderr } = await execAsync(fullCmd, { 
+                  timeout: 60000,
+                  maxBuffer: 1024 * 1024 
+                });
+                
                 output = stdout || stderr || 'Executado com sucesso.';
                 success = true;
                 break;
               } catch (err: any) {
                 lastError = err;
-                // Se o erro não for "not found", o psexec foi encontrado mas falhou a execução
-                if (!err.message.includes('not found')) {
-                   break;
+                console.error(`Falha ao tentar ${base}:`, err.stderr || err.message);
+                
+                if (err.message.includes('not found')) {
+                   continue;
                 }
+                break;
               }
             }
 
             if (success) {
               return { host, status: 'success', output };
             } else {
+              // Retorna o stderr detalhado para que o usuário saiba por que o psexec falhou
+              const detailedError = lastError?.stderr || lastError?.message || 'Erro desconhecido';
               return { 
                 host, 
                 status: 'failed', 
-                output: `Erro de execução remota: ${lastError?.stderr || lastError?.message || 'Arquivo não encontrado'}`
+                output: `Erro de execução remota:\n${detailedError}`
               };
             }
           }
