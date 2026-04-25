@@ -309,46 +309,41 @@ async function startServer() {
 
   // Helper para limpar logs de header de ferramentas como PsExec
   function cleanOutput(raw: string): string {
+    if (!raw) return '';
+
     const bannerKeywords = [
-      'PsExec v',
+      'PsExec v[0-9.]+',
       'Sysinternals - www.sysinternals.com',
-      'Copyright (C)',
-      'Starting PsExec service on',
-      'Connecting with PsExec service on',
-      'PsExec service on',
-      'Connecting to',
-      'Starting cmd on',
-      'Copying authentication key to',
-      'exited on', 
-      'with error code',
-      'cmd exited on'
+      'Copyright \\(C\\) [0-9-]+ Mark Russinovich',
+      'Starting PsExec service on [0-9.]+',
+      'Connecting with PsExec service on [0-9.]+',
+      'PsExec service on [0-9.]+',
+      'Connecting to [0-9.]+',
+      'Starting [^ ]+ on [0-9.]+',
+      'Copying authentication key to [0-9.]+',
+      'exited on [0-9.]+ with error code [0-9]+',
+      'cmd exited on [0-9.]+',
+      'PsExec could not start [^ ]+ on [0-9.]+'
     ];
 
-    const lines = raw.split(/\r?\n/);
+    // 1. Remove caracteres nulos e outros ruídos binários comuns em pipes do Windows
+    let cleaned = raw.replace(/\0/g, '');
+
+    // 2. Remove frases de banner específicas (mesmo que estejam no meio de texto)
+    bannerKeywords.forEach(kw => {
+      // Adicionamos \.* para pegar os "..." no final e fazemos global/insensitive
+      const regex = new RegExp(kw + '[\\s.]*', 'gi');
+      cleaned = cleaned.replace(regex, '');
+    });
+
+    // 3. Processamento por linha para remover prompts e linhas vazias
+    const lines = cleaned.split(/\r?\n/);
     const filtered = lines.filter(line => {
       const l = line.trim();
       if (!l) return false;
       
       // Prompt removal (e.g., C:\> or C:\Windows\system32>)
       if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
-
-      // Banner filtering
-      // Só removemos se a linha PARECER um banner, não se contiver apenas a palavra
-      // Se a linha for idêntica a um keyword ou começar com ele (comum para headers)
-      // Mas permitimos se a linha tiver dados úteis e apenas contiver a palavra (raro em banners)
-      const isBanner = bannerKeywords.some(kw => {
-        const lowerL = l.toLowerCase();
-        const lowerKw = kw.toLowerCase();
-        // Se a linha começa com o banner (PsExec v, Connecting to...)
-        if (lowerL.startsWith(lowerKw)) return true;
-        // Se a linha contém Copyright ou Sysinternals (geralmente banners inteiros)
-        if (lowerKw.includes('copyright') || lowerKw.includes('sysinternals')) {
-            if (lowerL.includes(lowerKw)) return true;
-        }
-        return false;
-      });
-
-      if (isBanner) return false;
       
       return true;
     });

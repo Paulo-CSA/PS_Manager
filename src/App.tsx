@@ -361,7 +361,11 @@ const App = () => {
           !a.includes('----') &&
           !a.includes('[') &&
           !a.startsWith('Success') &&
-          !a.includes('PsExec')
+          !a.includes('PsExec') &&
+          !a.includes('Connecting') &&
+          !a.includes('Starting') &&
+          !a.includes('Copying') &&
+          !a.includes('exited on')
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
