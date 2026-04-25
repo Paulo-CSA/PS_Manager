@@ -282,25 +282,9 @@ async function startServer() {
     }
   });
 
-  // Helper para limpar logs de header de ferramentas como PsExec
+  // Helper para manter o output bruto conforme solicitado
   function cleanOutput(raw: string): string {
-    const lines = raw.split(/\r?\n/);
-    const filtered = lines.filter(line => {
-      const l = line.trim();
-      if (!l) return false;
-      
-      const lower = l.toLowerCase();
-      // Only filter out the most common PsExec service banners to keep output clean 
-      // but without risking the removal of actual command content.
-      if (lower.startsWith('starting psexec service')) return false;
-      if (lower.startsWith('connecting with psexec service')) return false;
-      if (lower.includes('psexec service on')) return false;
-      if (lower.startsWith('copying authentication key to')) return false;
-      
-      return true;
-    });
-
-    return filtered.join('\n').trim();
+    return raw.trim();
   }
 
   // Vite integration
