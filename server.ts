@@ -72,18 +72,26 @@ async function winExecute(options: {
       
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
+      
       const timeout = setTimeout(() => {
         child.kill('SIGKILL');
         reject(new Error(`Timeout na execução (${executable})`));
       }, 120000);
 
-      child.stdout.on('data', (d) => { if (capture) stdoutChunks.push(d); });
-      child.stderr.on('data', (d) => { if (capture) stderrChunks.push(d); });
+      if (capture) {
+        child.stdout.on('data', (chunk: Buffer) => {
+          stdoutChunks.push(chunk);
+        });
+        child.stderr.on('data', (chunk: Buffer) => {
+          stderrChunks.push(chunk);
+        });
+      }
 
       child.on('close', (code) => {
         clearTimeout(timeout);
         let out = '';
         let err = '';
+        
         if (capture) {
           const outBuf = Buffer.concat(stdoutChunks);
           const errBuf = Buffer.concat(stderrChunks);
@@ -94,6 +102,7 @@ async function winExecute(options: {
           err = iconv.decode(errBuf, 'cp850');
           if (!err.trim() && errBuf.length > 0) err = iconv.decode(errBuf, 'utf-8');
         }
+        
         resolve({ out, err, code });
       });
 
