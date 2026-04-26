@@ -46,29 +46,24 @@ const App = () => {
   const [isIPModalOpen, setIsIPModalOpen] = useState(false);
   const [isAppModalOpen, setIsAppModalOpen] = useState(false);
   const [isWaitModalOpen, setIsWaitModalOpen] = useState(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isScriptManagerOpen, setIsScriptManagerOpen] = useState(false);
   const [isRunScriptModalOpen, setIsRunScriptModalOpen] = useState(false);
   const [scripts, setScripts] = useState<string[]>([]);
   const [scriptToRun, setScriptToRun] = useState<string | null>(null);
   const [scriptTargetHosts, setScriptTargetHosts] = useState<string[]>([]);
   
-  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [terminalHost, setTerminalHost] = useState<string | null>(null);
   const [terminalLog, setTerminalLog] = useState<{ type: 'in' | 'out', text: string }[]>([]);
   const [terminalLoading, setTerminalLoading] = useState(false);
   
   const terminalEndRef = useRef<HTMLDivElement>(null);
-  const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isTerminalOpen) {
       terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [terminalLog, isTerminalOpen]);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [log]);
 
   // Forms
   const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
@@ -336,12 +331,6 @@ const App = () => {
       
       results.forEach((r: any) => {
         setLog(prev => [...prev, `[${r.host}] ${r.status.toUpperCase()}: ${r.output}`]);
-        // Salva debug do último resultado no servidor
-        fetch('/api/save-debug', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: r.output })
-        }).catch(() => {});
       });
       return results;
     } catch (err) {
@@ -359,15 +348,19 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    // Comando PowerShell mais abrangente para listar apps
-    const listCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName | Sort-Object"`;
-    const results = await executeRemote(listCmd, [host]);
+    const results = await executeRemote(`powershell -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -ne $null } | Select-Object -ExpandProperty DisplayName"`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
       const apps = results[0].output.split('\n')
         .map((a: string) => a.trim())
-        .filter((a: string) => a.length > 0);
+        .filter((a: string) => 
+          a && 
+          !a.includes('Name') && 
+          !a.includes('----') &&
+          !a.includes('[') &&
+          !a.startsWith('Success')
+        );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
     }
@@ -376,15 +369,15 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    // Comando via PowerShell otimizado
-    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace '/I', '/X'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
+    // Comando via PowerShell para desinstalação via DisplayName (UninstallString)
+    const uninstallCmd = `powershell -Command "$app = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { Start-Process cmd.exe -ArgumentList '/c', $app.UninstallString, '/quiet', '/norestart' -Wait }"`;
     await executeRemote(uninstallCmd, [host]);
     setIsAppModalOpen(false);
   };
 
   const openTerminal = (host: string) => {
     setTerminalHost(host);
-    setTerminalLog([{ type: 'out', text: `Conectando ao terminal de ${host}...` }]);
+    setTerminalLog([{ type: 'out', text: `Conectando ao terminal WMI de ${host}...` }]);
     setIsTerminalOpen(true);
   };
 
@@ -404,12 +397,6 @@ const App = () => {
       
       if (res.ok) {
         setTerminalLog(prev => [...prev, { type: 'out', text: data.output }]);
-        // Debug save
-        fetch('/api/save-debug', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: data.output })
-        }).catch(() => {});
       } else {
         setTerminalLog(prev => [...prev, { type: 'out', text: `ERRO: ${data.error}` }]);
       }
@@ -450,8 +437,8 @@ const App = () => {
             <Cpu className="text-white" size={24} />
           </div>
           <div>
-            <h1 className="text-lg font-bold tracking-tight leading-none">PC_MANAGER</h1>
-            <span className="text-[10px] text-blue-500 font-mono uppercase tracking-[0.2em]">Remote Control v1.0</span>
+            <h1 className="text-lg font-bold tracking-tight leading-none">PC_MANAGER_PRO_LINUX</h1>
+            <span className="text-[10px] text-blue-500 font-mono uppercase tracking-[0.2em]">Remote Control v1.1</span>
           </div>
         </div>
 
@@ -760,25 +747,15 @@ const App = () => {
                   <Terminal size={14} className="text-gray-500" />
                   <span className="text-[10px] font-mono uppercase text-gray-500 tracking-widest">Saída do Console</span>
                 </div>
-                <div className="flex-1 overflow-y-auto font-mono text-[11px] space-y-4 text-[#E4E3E0] p-4 custom-scrollbar bg-black/20">
-                  {log.map((line, i) => {
-                    const isCmd = line.startsWith('[CMD]');
-                    const isError = line.startsWith('[ERROR]');
-                    const isSuccess = line.includes('SUCCESS');
-                    
-                    return (
-                      <div key={i} className="flex gap-4 group border-b border-white/5 pb-4 last:border-0">
-                        <span className="opacity-10 select-none text-[9px] shrink-0 w-6 text-right mt-1 font-sans">{i + 1}</span>
-                        <div className={`flex-1 overflow-x-auto custom-scrollbar ${isCmd ? 'text-blue-400 font-bold' : isError ? 'text-red-400' : isSuccess ? 'text-emerald-400' : ''}`}>
-                          <pre className="whitespace-pre font-mono leading-relaxed">
-                            {line}
-                          </pre>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {log.length === 0 && <div className="text-gray-700 italic h-full flex items-center justify-center font-sans tracking-wide">Console pronto para comandos remotas...</div>}
-                  <div ref={logEndRef} />
+                <div className="flex-1 overflow-y-auto font-mono text-xs space-y-1 text-blue-300/80 p-2">
+                  {log.map((line, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="opacity-30 select-none">{i + 1}</span>
+                      <span>{line}</span>
+                    </div>
+                  ))}
+                  {log.length === 0 && <span className="text-gray-700 italic">Pronto para execução...</span>}
+                  <div id="anchor" />
                 </div>
               </div>
             </>
@@ -1310,7 +1287,7 @@ const App = () => {
         )}
       </AnimatePresence>
 
-      {/* Terminal Modal */}
+      {/* Terminal WMI Modal */}
       <AnimatePresence>
         {isTerminalOpen && (
           <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
@@ -1327,7 +1304,7 @@ const App = () => {
                     <Cpu className="text-amber-500" size={20} />
                   </div>
                   <div>
-                    <h3 className="font-bold text-sm">Shell Remoto (PsExec)</h3>
+                    <h3 className="font-bold text-sm">Shell Interativo (WMI)</h3>
                     <p className="text-[10px] text-gray-500 font-mono tracking-tighter uppercase">Conectado em: {terminalHost}</p>
                   </div>
                 </div>
@@ -1337,13 +1314,13 @@ const App = () => {
                     className="p-2 hover:bg-white/5 rounded-lg transition-all text-gray-500 hover:text-white"
                     title="Limpar Terminal"
                   >
-                    <Trash size={18} />
+                    <Trash2 size={16} />
                   </button>
                   <button 
                     onClick={() => setIsTerminalOpen(false)}
-                    className="p-2 hover:bg-white/5 rounded-lg transition-all"
+                    className="p-2 hover:bg-white/5 rounded-full transition-all"
                   >
-                    <Plus className="rotate-45" size={20} />
+                    <XCircle size={22} className="text-gray-500 hover:text-red-500" />
                   </button>
                 </div>
               </div>

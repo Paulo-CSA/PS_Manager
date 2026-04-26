@@ -3,8 +3,6 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
-import iconv from 'iconv-lite';
 
 import bodyParser from 'body-parser';
 import cors from 'cors';
@@ -36,20 +34,10 @@ async function writeDb(data: any) {
   await fsp.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// Helper para execução de comandos retornando buffers brutos para depuração
-async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: Buffer, stderr: Buffer }> {
-  return new Promise((resolve, reject) => {
-    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 1024 * 1024 * 10 }, (error: any, stdout, stderr) => {
-      if (error) {
-        const errObj = error as any;
-        errObj.stdoutRaw = stdout;
-        errObj.stderrRaw = stderr;
-        return reject(errObj);
-      }
-      resolve({ stdout: stdout as Buffer, stderr: stderr as Buffer });
-    });
-  });
-}
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 async function startServer() {
   const app = express();
@@ -175,166 +163,196 @@ async function startServer() {
       return res.status(404).json({ error: 'Script não encontrado no servidor' });
     }
 
-    // Criamos uma cópia temporária do script para injetar o comando de autodeleção
-    const tempScriptName = `tmp_${Date.now()}_${scriptName}`;
-    const tempScriptPath = path.join(SCRIPTS_DIR, tempScriptName);
-
     try {
       const { username, password } = creds;
       
-      // Lemos o conteúdo original e injetamos o comando de auto-exclusão do Windows Batch
-      // O comando (goto) 2>nul & del "%~f0" é um truque clássico para um .bat se deletar
-      const originalContent = fs.readFileSync(scriptPath, 'utf-8');
-      const modifiedContent = originalContent + '\r\n\r\nREM Auto-cleanup\r\n(goto) 2>nul & del "%~f0"\r\n';
-      fs.writeFileSync(tempScriptPath, modifiedContent);
+      // 1. Garantir que o diretório C:\PCManager existe via wmiexec
+      const mkdirCmd = `/root/.local/bin/wmiexec.py "${username}:${password}@${host}" "if not exist C:\\PCManager mkdir C:\\PCManager"`;
+      await execAsync(mkdirCmd, { timeout: 15000 }).catch(() => {}); 
 
-      // No Windows nativo, psexec -c lida com o upload e execução em um passo só
-      // Adicionamos -f para forçar o backup/copy se já existir
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -f -c "${tempScriptPath}"`;
+      // 2. Upload do arquivo via smbclient.py para C:\PCManager\
+      // Impacket's smbclient.py doesn't have -c, so we pipe commands
+      const scriptFileName = path.basename(scriptPath);
+      const smbclientPath = '/root/.local/bin/smbclient.py';
+      // We use a temporary file to pipe commands or use a shell string with printf
+      const uploadCmd = `printf "use C$\\ncd PCManager\\nput ${scriptPath}\\nexit\\n" | ${smbclientPath} "${username}:${password}@${host}"`;
       
-      console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
-      const { stdout, stderr } = await execWin(runCmd, 120000);
+      console.log(`[SCRIPT_UPLOAD] ${uploadCmd}`);
+      await execAsync(uploadCmd, { timeout: 45000, shell: '/bin/bash' });
+
+      // 3. Executar o script via wmiexec
+      const wmiPath = '/root/.local/bin/wmiexec.py';
+      const runCmd = `${wmiPath} "${username}:${password}@${host}" "C:\\PCManager\\${scriptName}"`;
       
-      // Preservamos o máximo possível usando decoding cp850 que é o padrão Windows BR
-      const outStr = iconv.decode(stdout, 'cp850');
-      const errStr = iconv.decode(stderr, 'cp850');
+      console.log(`[SCRIPT_EXEC] ${runCmd}`);
+      const { stdout, stderr } = await execAsync(runCmd, { timeout: 120000 });
       
-      const combined = [outStr, errStr].filter(Boolean).join('\n');
-      res.json({ output: cleanOutput(combined) || 'Script executado.' });
+      const output = cleanImpacketOutput(stdout + stderr);
+      res.json({ output: output || 'Script executado com sucesso e salvo em C:\\PCManager.' });
     } catch (err: any) {
-      const outErr = err.stdoutRaw ? iconv.decode(err.stdoutRaw, 'cp850') : '';
-      const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
-      const msgErr = err.message || '';
-      const combined = [outErr, errErr, msgErr].filter(Boolean).join('\n');
-      res.status(500).json({ error: cleanOutput(combined) });
-    } finally {
-      // Cleanup do arquivo temporário no servidor
-      try {
-        if (fs.existsSync(tempScriptPath)) {
-          fs.unlinkSync(tempScriptPath);
-        }
-      } catch (cleanupErr) {
-        console.error('Erro ao limpar script temporário local:', cleanupErr);
-      }
+      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
+      res.status(500).json({ error: cleanImpacketOutput(rawError) || 'Erro ao executar script' });
     }
   });
 
   app.post('/api/shell', async (req, res) => {
     const { host, command } = req.body;
     const db = await readDb();
+    const machine = db.machines.find((m: any) => m.ip === host);
+
+    if (!machine) {
+      return res.status(404).json({ error: 'Host não encontrado na base de dados' });
+    }
+
     const creds = db.credentials;
-    
     if (!creds || !creds.username || !creds.password) {
-      return res.status(400).json({ error: 'Credenciais nao configuradas.' });
+      return res.status(400).json({ error: 'Credenciais globais não configuradas' });
     }
 
     const { username, password } = creds;
 
+    const wmiBase = '/root/.local/bin/wmiexec.py';
+
     try {
-      // Use -nobanner to reduce noise, -h for elevation
-      const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec -nobanner -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
+      // Usamos aspas simples ao redor do comando para evitar que o Linux interprete o '$' do PowerShell/CMD
+      const shellEscapedCommand = command.replace(/'/g, "'\\''");
+      const fullCmd = `${wmiBase} "${username}:${password}@${host}" '${shellEscapedCommand}'`;
       
-      console.log(`[SHELL_REMOTO] ${fullCmd}`);
+      console.log(`[SHELL] ${fullCmd}`);
 
-      const { stdout, stderr } = await execWin(fullCmd, 60000);
-      
-      const outStr = iconv.decode(stdout, 'cp850');
-      const errStr = iconv.decode(stderr, 'cp850');
-      
-      // Separate actual output from PsExec messages
-      let displayResult = '';
-      if (outStr.trim()) {
-        displayResult = outStr;
-        // If we have real output and also some connection log, append log at bottom
-        if (errStr.trim()) {
-          displayResult += '\n\n--- [LOGS DE CONEXÃO/DEBUG] ---\n' + errStr;
-        }
-      } else {
-        // If no stdout, show whatever we have in stderr
-        displayResult = errStr;
-      }
+      const { stdout, stderr } = await execAsync(fullCmd, { 
+        timeout: 30000,
+        maxBuffer: 1024 * 512 
+      });
 
-      res.json({ output: cleanOutput(displayResult) || 'Executado (Sem retorno de texto).' });
+      const rawOutput = (stdout || '') + (stderr || '');
+      const output = cleanImpacketOutput(rawOutput) || 'Comando executado.';
+
+      res.json({ output });
     } catch (err: any) {
-      const outErr = err.stdoutRaw ? iconv.decode(err.stdoutRaw, 'cp850') : '';
-      const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
-      const msgErr = err.message || '';
-      res.status(500).json({ error: cleanOutput(outErr + errErr + msgErr) });
+      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
+      const detailedError = cleanImpacketOutput(rawError) || 'Erro na conexão WMI';
+      // Mesmo com erro, se houver output útil (como resultado de um comando que retornou exit code != 0), enviamos
+      res.status(500).json({ error: detailedError });
     }
   });
 
   app.post('/api/exec', async (req, res) => {
-    const { hosts, command, username: bodyUsername, password: bodyPassword } = req.body;
-    const db = await readDb();
-    const username = bodyUsername || db.credentials?.username;
-    const password = bodyPassword || db.credentials?.password;
-
-    if (!hosts || !Array.isArray(hosts) || !command) {
-      return res.status(400).json({ error: 'Dados incompletos' });
-    }
-
+    const { hosts, command, username, password } = req.body;
+    if (!hosts || !command) return res.status(400).json({ error: 'Dados incompletos' });
+    
     try {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
+          let finalCmd = command;
+          
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            const escapedCommand = command.replace(/"/g, '""');
-            const fullCmd = `psexec -nobanner -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
+            // Prioritizing wmiexec.py as requested for better reliability
+            const possibleCmds = [
+              `/root/.local/bin/wmiexec.py`,
+              `wmiexec.py`,
+              `/root/.local/bin/psexec.py`,
+              `psexec.py`,
+              `impacket-psexec`,
+              `/usr/local/bin/psexec.py`,
+              `python3 -m impacket.examples.wmiexec`,
+              `python3 -m impacket.examples.psexec`
+            ];
             
-            console.log(`[BULK_EXEC] ${fullCmd}`);
+            let lastError = null;
+            let success = false;
+            let output = '';
 
-            const { stdout, stderr } = await execWin(fullCmd, 60000);
-            
-            const outStr = iconv.decode(stdout, 'cp850');
-            const errStr = iconv.decode(stderr, 'cp850');
-            
-            let displayResult = outStr.trim() ? outStr : errStr;
-            const cleaned = cleanOutput(displayResult);
-            
-            return { host, status: 'success', output: cleaned || 'Executado.' };
-          } else {
-            const { stdout, stderr } = await execWin(command);
-            const combined = iconv.decode(stdout, 'cp850') + iconv.decode(stderr, 'cp850');
-            return { host, status: 'success', output: cleanOutput(combined) };
+            for (const base of possibleCmds) {
+              try {
+                // Usamos aspas simples ao redor do comando para evitar que o Linux interprete o '$' do PowerShell
+                const escapedCommand = command.replace(/'/g, "'\\''");
+                const fullCmd = `${base} "${username}:${password}@${host}" '${escapedCommand}'`;
+                
+                console.log(`[EXEC] ${fullCmd}`);
+
+                const { stdout, stderr } = await execAsync(fullCmd, { 
+                  timeout: 60000,
+                  maxBuffer: 1024 * 1024 
+                });
+                
+                const rawOutput = (stdout || '') + (stderr || '');
+                const cleaned = cleanImpacketOutput(rawOutput);
+                
+                output = cleaned || 'Executado com sucesso.';
+                success = true;
+                break;
+              } catch (err: any) {
+                lastError = err;
+                
+                // Se psexec retornou erro mas tem output (ou erro de pipes), tentamos ler o que veio
+                const rawOutput = (err.stdout || '') + (err.stderr || '');
+                const cleaned = cleanImpacketOutput(rawOutput);
+                
+                // Se o erro for de rede/SMB (STATUS_REQUEST_NOT_ACCEPTED), não devemos considerar sucesso
+                const isSmbError = rawOutput.includes('SMB SessionError') || rawOutput.includes('STATUS_REQUEST_NOT_ACCEPTED');
+
+                // Se temos conteúdo útil e NÃO é um erro fatal de SMB, tentamos extrair o que deu
+                if (cleaned && !isSmbError && !cleaned.includes('Something wen\'t wrong connecting the pipes')) {
+                   output = cleaned;
+                   success = true;
+                   break;
+                }
+
+                if (err.message.includes('not found')) {
+                   continue;
+                }
+                
+                console.error(`Falha ao tentar ${base}:`, err.stderr || err.message);
+                // Se falhou por erro real (não "not found"), interrompe o loop e mostra o erro
+                break;
+              }
+            }
+
+            if (success) {
+              return { host, status: 'success', output };
+            } else {
+              // Retorna o output detalhado para que o usuário saiba por que o psexec falhou
+              const rawError = (lastError?.stdout || '') + (lastError?.stderr || lastError?.message || '');
+              const detailedError = cleanImpacketOutput(rawError) || 'Erro desconhecido';
+              return { 
+                host, 
+                status: 'failed', 
+                output: `Erro de execução remota:\n${detailedError}`
+              };
+            }
           }
         } catch (err: any) {
-          const outErr = err.stdoutRaw ? iconv.decode(err.stdoutRaw, 'cp850') : '';
-          const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
-          const combined = outErr + errErr + (err.message || '');
-          const cleaned = cleanOutput(combined);
-          return { host, status: 'failed', output: cleaned || 'Erro na execucao' };
+          return { 
+            host, 
+            status: 'failed', 
+            output: `Erro: ${err.stderr || err.stdout || err.message}` 
+          };
         }
       }));
       res.json({ results });
     } catch (err) {
-      console.error('Erro na API de execute:', err);
+      console.error('Erro na API de exec:', err);
       res.status(500).json({ error: 'Erro interno no servidor' });
     }
   });
 
-  // Helper para retornar o output o mais fiel possível ao CMD original
-  function cleanOutput(raw: string): string {
-    if (!raw) return '';
-    // Preserve characters but normalize line endings. Remove null bytes.
-    // PsExec often produces \r\r\n, so we normalize to single \n
-    return raw
-      .replace(/\0/g, '')
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      .replace(/\n\n+/g, '\n\n') // Prevent excessive empty lines
-      .trim();
+  // Helper para limpar logs do Impacket
+  function cleanImpacketOutput(raw: string): string {
+    return raw.split('\n').filter(line => {
+      const l = line.trim();
+      if (!l) return false;
+      if (l.startsWith('Impacket v')) return false;
+      if (l.startsWith('[*]')) return false;
+      if (l.startsWith('[+]')) return false;
+      if (l.startsWith('[-] Something wen\'t wrong')) return false;
+      if (l.startsWith('[!] Press help')) return false;
+      if (l.startsWith('Configuring service...')) return false;
+      // WMIExec specific prompt removal (e.g., C:\> or C:\Windows\system32>)
+      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
+      return true;
+    }).join('\n').trim();
   }
-
-  // Debug log endpoint
-  app.post('/api/save-debug', async (req, res) => {
-    try {
-      const { content } = req.body;
-      await fsp.writeFile('last_output_raw.txt', content);
-      res.json({ success: true });
-    } catch (e) {
-      res.status(500).json({ error: 'Erro ao salvar debug' });
-    }
-  });
 
   // Vite integration
   if (process.env.NODE_ENV !== 'production') {
