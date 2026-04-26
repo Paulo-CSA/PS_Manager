@@ -76,68 +76,60 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command); 
       } else {
-        // Strategic approach: Redirect all output to a unique remote temporary file,
-        // then read its content via 'type' and delete it after a 20s delay.
-        // We use the '^' escaping pattern as suggested to ensure redirection happens REMOTELY.
-        const uniqueId = Math.floor(Math.random() * 100000);
-        const remoteOutFile = `C:\\out_${uniqueId}.txt`;
-        
-        // Construct the full command block with the escaping symbols
-        const fullRemoteCmd = `${command} ^> ${remoteOutFile} 2^>^&1 ^& type ${remoteOutFile} ^& timeout /t 20 /nobreak ^>nul ^& del /f /q ${remoteOutFile}`;
-        
-        args.push('cmd', '/c', fullRemoteCmd);
+        // Relying on server-side local redirection to capture PsExec output reliably.
+        args.push('cmd', '/c', command);
       }
     }
 
-    console.log(`[EXEC] Host: ${host} | Cmd: ${executable} ${args.join(' ')}`);
+    // Local redirection approach on the server
+    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 1000);
+    const localOutFile = path.join(STORAGE_DIR, `out_${uniqueId}.txt`);
+    
+    // Properly quote arguments for cmd.exe
+    const quotedArgs = args.map(arg => {
+      if (/[ >&|^]/.test(arg)) {
+        return `"${arg}"`;
+      }
+      return arg;
+    }).join(' ');
 
-    const child = spawn(executable, args, {
+    const fullCommand = `"${executable}" ${quotedArgs} > "${localOutFile}" 2>&1`;
+    console.log(`[EXEC] Host: ${host} | Local Redir: ${fullCommand}`);
+
+    const child = spawn('cmd.exe', ['/c', fullCommand], {
       shell: false,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'] 
     });
 
-    let stdoutChunks: Buffer[] = [];
-    let stderrChunks: Buffer[] = [];
-
-    child.stdout.on('data', (data: Buffer) => {
-      stdoutChunks.push(data);
-    });
-
-    child.stderr.on('data', (data: Buffer) => {
-      stderrChunks.push(data);
-    });
-
-    // Increased timeout to 95s to support the 20s remote wait and potential network lag
     const timeoutDuration = isScript ? 180000 : 95000;
     const timer = setTimeout(() => {
-      child.kill();
+      child.kill('SIGKILL');
+      if (fs.existsSync(localOutFile)) try { fs.unlinkSync(localOutFile); } catch(e) {}
       reject(new Error(`Timeout na execução remota (${timeoutDuration / 1000}s)`));
     }, timeoutDuration);
 
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       clearTimeout(timer);
       
-      const stdoutRaw = Buffer.concat(stdoutChunks);
-      const stderrRaw = Buffer.concat(stderrChunks);
-      
-      let stdout = iconv.decode(stdoutRaw, 'cp850');
-      let stderr = iconv.decode(stderrRaw, 'cp850');
+      try {
+        let stdout = '';
+        if (fs.existsSync(localOutFile)) {
+          const raw = fs.readFileSync(localOutFile);
+          stdout = iconv.decode(raw, 'cp850');
+          // Clean up the local file
+          try { fs.unlinkSync(localOutFile); } catch(e) {}
+        }
 
-      if (!stdout.trim() && stdoutRaw.length > 0) {
-        stdout = iconv.decode(stdoutRaw, 'utf-8');
+        console.log(`[EXEC] ${host} Done | Code: ${code} | Out: ${stdout.length} chars`);
+        resolve({ stdout, stderr: '', exitCode: code });
+      } catch (err) {
+        reject(err);
       }
-      if (!stderr.trim() && stderrRaw.length > 0) {
-        stderr = iconv.decode(stderrRaw, 'utf-8');
-      }
-
-      console.log(`[EXEC] ${host} Done | Code: ${code} | Out: ${stdoutRaw.length} bytes`);
-
-      resolve({ stdout, stderr, exitCode: code });
     });
 
     child.on('error', (err) => {
       clearTimeout(timer);
+      if (fs.existsSync(localOutFile)) try { fs.unlinkSync(localOutFile); } catch(e) {}
       reject(err);
     });
   });
