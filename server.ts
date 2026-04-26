@@ -76,18 +76,20 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command); 
       } else {
-        // Construct the remote command with output redirection to a temporary file
-        // directly as arguments to PsExec. We avoid redundant 'cmd /c' and use 
-        // the shell features of the remote process.
-        const remoteOutFile = "C:\\out.txt";
-        // Increased timeout to 20s as requested by user to ensure full output capture
-        const fullRemoteCmd = `${command} > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 20 /nobreak > nul 2>&1 & del /f /q ${remoteOutFile}`;
+        // Strategic approach: Redirect all output to a unique remote temporary file,
+        // then read its content via 'type' and delete it after a 20s delay.
+        // We use the '^' escaping pattern as suggested to ensure redirection happens REMOTELY.
+        const uniqueId = Math.floor(Math.random() * 100000);
+        const remoteOutFile = `C:\\out_${uniqueId}.txt`;
+        
+        // Construct the full command block with the escaping symbols
+        const fullRemoteCmd = `${command} ^> ${remoteOutFile} 2^>^&1 ^& type ${remoteOutFile} ^& timeout /t 20 /nobreak ^>nul ^& del /f /q ${remoteOutFile}`;
         
         args.push('cmd', '/c', fullRemoteCmd);
       }
     }
 
-    console.log(`[EXEC] Cmd: ${executable} ${args.join(' ')}`);
+    console.log(`[EXEC] Host: ${host} | Cmd: ${executable} ${args.join(' ')}`);
 
     const child = spawn(executable, args, {
       shell: false,
@@ -106,8 +108,8 @@ async function winExecute(options: {
       stderrChunks.push(data);
     });
 
-    // Increased timeout to 90s to support the 20s remote wait
-    const timeoutDuration = isScript ? 180000 : 90000;
+    // Increased timeout to 95s to support the 20s remote wait and potential network lag
+    const timeoutDuration = isScript ? 180000 : 95000;
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`Timeout na execução remota (${timeoutDuration / 1000}s)`));
@@ -129,7 +131,7 @@ async function winExecute(options: {
         stderr = iconv.decode(stderrRaw, 'utf-8');
       }
 
-      console.log(`[EXEC] Close Code: ${code} | Stdout: ${stdoutRaw.length} bytes | Stderr: ${stderrRaw.length} bytes`);
+      console.log(`[EXEC] ${host} Done | Code: ${code} | Out: ${stdoutRaw.length} bytes`);
 
       resolve({ stdout, stderr, exitCode: code });
     });
@@ -150,27 +152,23 @@ function formatOutput(stdout: string, stderr: string): string {
 
   const filterPhrases = [
     'psexec v',
-    'sysinternals',
     'copyright',
+    'sysinternals',
     'starting psexec service',
     'connecting to',
     'connected to',
     'exited on',
-    'psexec.exe',
-    'microsoft (r) windows (r)'
+    'psexec.exe'
   ];
 
   const lines = combined.split('\n');
   const filtered = lines.filter(line => {
     const l = line.trim().toLowerCase();
-    if (!l) return false;
+    if (!l) return true; // Keep empty lines for spacing
     
-    // Skip common informational noise
+    // Skip PsExec specific noise only
     if (filterPhrases.some(p => l.includes(p))) return false;
     
-    // Skip common windows prompt patterns like C:\>
-    if (/^[a-z]:\\.*>$/i.test(l)) return false;
-
     return true;
   });
 
