@@ -61,10 +61,11 @@ async function winExecute(options: {
   const { host, command, username, password, isScript } = options;
   const isLocal = host === 'localhost' || host === '127.0.0.1';
 
-  const runSingle = (cmdStr: string, capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
+  const runArgs = (executable: string, args: string[], capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
     return new Promise((resolve, reject) => {
-      const child = spawn(cmdStr, [], { 
-        shell: true, 
+      console.log(`[SPAWN] ${executable} ${args.join(' ')}`);
+      const child = spawn(executable, args, { 
+        shell: false, 
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -73,8 +74,8 @@ async function winExecute(options: {
       const stderrChunks: Buffer[] = [];
       const timeout = setTimeout(() => {
         child.kill('SIGKILL');
-        reject(new Error('Processo demorou muito para responder'));
-      }, 90000);
+        reject(new Error(`Timeout na execução (${executable})`));
+      }, 120000);
 
       child.stdout.on('data', (d) => { if (capture) stdoutChunks.push(d); });
       child.stderr.on('data', (d) => { if (capture) stderrChunks.push(d); });
@@ -105,19 +106,24 @@ async function winExecute(options: {
 
   if (isLocal) {
     console.log(`[EXEC] Local | Command: ${command}`);
-    const res = await runSingle(`cmd /c "${command}"`, true);
+    const res = await runArgs('cmd.exe', ['/c', command], true);
     return { stdout: res.out, stderr: res.err, exitCode: res.code };
   }
 
   const psexec = 'psexec.exe';
-  const auth = `${username ? `-u "${username}"` : ''} ${password ? `-p "${password}"` : ''}`;
-  const baseAuth = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h`;
+  const baseArgs = [`\\\\${host}`];
+  if (username) {
+    baseArgs.push('-u', username);
+  }
+  if (password) {
+    baseArgs.push('-p', password);
+  }
+  baseArgs.push('-accepteula', '-nobanner', '-h');
 
   try {
     if (isScript) {
       console.log(`[EXEC] ${host} | Script: ${command}`);
-      const scriptExec = `${baseAuth} -c "${command}"`;
-      const res = await runSingle(scriptExec, true);
+      const res = await runArgs(psexec, [...baseArgs, '-c', command], true);
       return { stdout: res.out, stderr: res.err, exitCode: res.code };
     } else {
       const uniqueId = Math.floor(Math.random() * 100000);
@@ -125,45 +131,24 @@ async function winExecute(options: {
 
       // 1. CREATE FILE
       console.log(`[EXEC] ${host} [STEP 1] Criando: ${remoteOutFile}`);
-      const createCmd = `${baseAuth} cmd /c "(${command}) > ${remoteOutFile} 2>&1"`;
-      await runSingle(createCmd, false);
+      const createArgs = [...baseArgs, 'cmd', '/c', `(${command}) > ${remoteOutFile} 2>&1`].filter(v => v !== '');
+      await runArgs(psexec, createArgs, false);
 
       await sleep(5000);
 
-      // 2. READ FILE (Com marcadores para isolar o Base64)
-      console.log(`[EXEC] ${host} [STEP 2] Lendo via Base64 Protegido: ${remoteOutFile}`);
-      const readCmd = `${baseAuth} powershell -NoProfile -ExecutionPolicy Bypass -Command "$b=[Convert]::ToBase64String([IO.File]::ReadAllBytes('${remoteOutFile}')); Write-Output '---B64_START---'; Write-Output $b; Write-Output '---B64_END---'"`;
-      const readRes = await runSingle(readCmd, true);
+      // 2. READ FILE
+      console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
+      const readArgs = [...baseArgs, 'cmd', '/c', `type ${remoteOutFile}`].filter(v => v !== '');
+      const readRes = await runArgs(psexec, readArgs, true);
       
-      let finalOutput = '';
-      const b64Match = readRes.out.match(/---B64_START---([\s\S]*?)---B64_END---/);
-      
-      if (b64Match && b64Match[1]) {
-        try {
-          const b64Data = b64Match[1].trim().replace(/[\r\n\s]/g, '');
-          const buffer = Buffer.from(b64Data, 'base64');
-          // Tentamos CP850 primeiro (padrão cmd), depois UTF-8
-          finalOutput = iconv.decode(buffer, 'cp850');
-          if (!finalOutput.trim()) finalOutput = iconv.decode(buffer, 'utf-8');
-          finalOutput = finalOutput.replace(/\0/g, '');
-        } catch (decErr) {
-          console.error(`[DECODE ERROR] ${host}:`, decErr);
-          finalOutput = "Erro ao decodificar dados do arquivo.";
-        }
-      } else {
-        console.warn(`[READ WARNING] Marcadores base64 não encontrados em ${host}. Raw output len: ${readRes.out.length}`);
-        // Fallback: se não achou marcadores, mostra o stdout bruto mas limpo (pode vir com banners do psexec)
-        finalOutput = readRes.out.replace(/---B64_START---|---B64_END---/g, '').trim();
-      }
+      console.log(`[READ INFO] ${host} stdout bytes: ${readRes.out.length}, stderr_bytes: ${readRes.err.length}`);
 
-      console.log(`[READ INFO] ${host} caracteres finais: ${finalOutput.length}`);
-
-      // 3. DELETE FILE
+      // 3. DELETE FILE (Detached Cleanup)
       console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
-      const cleanupCmd = `${baseAuth} cmd /c "ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}"`;
-      spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
+      const cleanupArgs = [...baseArgs, 'cmd', '/c', `ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}`].filter(v => v !== '');
+      spawn(psexec, cleanupArgs, { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
 
-      return { stdout: finalOutput, stderr: readRes.err, exitCode: readRes.code };
+      return { stdout: readRes.out.replace(/\0/g, ''), stderr: readRes.err, exitCode: readRes.code };
     }
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
