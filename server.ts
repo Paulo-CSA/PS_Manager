@@ -70,18 +70,17 @@ async function winExecute(options: {
       if (username) args.push('-u', username);
       if (password) args.push('-p', password);
 
-      // -h: elevated, -accepteula/-nobanner: clean, -i: helps with output capture for some commands
-      args.push('-accepteula', '-nobanner', '-h', '-i'); 
+      // -h: elevated, -accepteula/-nobanner: clean
+      args.push('-accepteula', '-nobanner', '-h'); 
 
       if (isScript) {
         args.push('-c', command); 
       } else {
-        // Only use cmd /c if needed, otherwise run directly
-        if (command.trim().includes(' ') || command.includes('&') || command.includes('|') || command.includes('>')) {
-          args.push('cmd', '/c', command);
-        } else {
-          args.push(command);
-        }
+        // Redirection trick: capture output to a temporary file on the REMOTE machine, 
+        // type it to stdout, then delete it. This bypasses psexec's piping limitations.
+        const tempFile = 'C:\\psexec_out_' + Math.floor(Math.random() * 99999) + '.txt';
+        const wrappedCommand = `cmd /c "${command} > ${tempFile} 2>&1 & type ${tempFile} & del ${tempFile}"`;
+        args.push('cmd', '/c', wrappedCommand);
       }
     }
 
