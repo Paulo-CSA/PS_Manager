@@ -35,9 +35,25 @@ async function writeDb(data: any) {
 }
 
 import { exec } from 'child_process';
-import { promisify } from 'util';
+import iconv from 'iconv-lite';
 
-const execAsync = promisify(exec);
+// Helper customizado para lidar com encoding CP850 (Windows)
+async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, stderr: string }> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 2 * 1024 * 1024 }, (error: any, stdout, stderr) => {
+      // Usamos CP850 para suportar acentos do CMD brasileiro
+      const outStr = iconv.decode(stdout as Buffer, 'cp850');
+      const errStr = iconv.decode(stderr as Buffer, 'cp850');
+      
+      if (error) {
+        error.stdout = outStr;
+        error.stderr = errStr;
+        return reject(error);
+      }
+      resolve({ stdout: outStr, stderr: errStr });
+    });
+  });
+}
 
 async function startServer() {
   const app = express();
@@ -171,7 +187,7 @@ async function startServer() {
       const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${scriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
-      const { stdout, stderr } = await execAsync(runCmd, { timeout: 120000 });
+      const { stdout, stderr } = await execWin(runCmd, 120000);
       
       const rawOutput = (stdout || '') + (stderr || '');
       const output = cleanOutput(rawOutput);
@@ -200,29 +216,25 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
+      // Determinamos a melhor forma de chamar o comando
       let fullCmd;
-      // Para comandos simples sem redirecionamento ou pipes, podemos chamar direto.
-      // Isso ajuda a evitar problemas de aspas extras do cmd /c.
-      const hasSpecialChars = /[&|<>^]/.test(command);
-      
-      if (!hasSpecialChars) {
+      if (command.toLowerCase().includes('powershell')) {
+          // Para powershell, evitamos o cmd /c se possível para não quebrar pipes
           fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
       } else {
+          // No Windows, envolvemos o comando em aspas para o CMD
           const escapedCommand = command.replace(/"/g, '""');
           fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
       }
       
       console.log(`[SHELL_WIN] ${fullCmd}`);
 
-      const { stdout, stderr } = await execAsync(fullCmd, { 
-        timeout: 60000,
-        maxBuffer: 1024 * 1024 // 1MB
-      });
+      const { stdout, stderr } = await execWin(fullCmd, 45000);
 
       const rawOutput = (stdout || '') + (stderr || '');
-      const output = cleanOutput(rawOutput);
+      const output = cleanOutput(rawOutput) || 'Comando executado com sucesso (sem retorno).';
 
-      res.json({ output: output || rawOutput || 'Comando executado com sucesso (sem retorno).' });
+      res.json({ output });
     } catch (err: any) {
       const rawError = (err.stdout || '') + (err.stderr || err.message || '');
       const cleaned = cleanOutput(rawError);
@@ -239,9 +251,7 @@ async function startServer() {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
             let fullCmd;
-            const hasSpecialChars = /[&|<>^]/.test(command);
-            
-            if (!hasSpecialChars) {
+            if (command.toLowerCase().includes('powershell')) {
                 fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
             } else {
                 const escapedCommand = command.replace(/"/g, '""');
@@ -250,19 +260,15 @@ async function startServer() {
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
-            const { stdout, stderr } = await execAsync(fullCmd, { 
-              timeout: 60000,
-              maxBuffer: 1024 * 1024 
-            });
+            const { stdout, stderr } = await execWin(fullCmd, 60000);
             
             const rawOutput = (stdout || '') + (stderr || '');
             const cleaned = cleanOutput(rawOutput);
             
-            // Se o comando teve output real, usamos ele. Se foi vazio ou so tinha cabeçalho, enviamos o raw ou mensagem padrão.
-            return { host, status: 'success', output: cleaned || rawOutput || 'Executado com sucesso (sem retorno).' };
+            return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
           } else {
             // Local fallback
-            const { stdout, stderr } = await execAsync(command);
+            const { stdout, stderr } = await execWin(command);
             return { host, status: 'success', output: stdout + stderr };
           }
         } catch (err: any) {
@@ -282,9 +288,53 @@ async function startServer() {
     }
   });
 
-  // Helper para manter o output bruto conforme solicitado
+  // Helper para limpar logs de header de ferramentas como PsExec
   function cleanOutput(raw: string): string {
-    return raw.trim();
+    const bannerKeywords = [
+      'PsExec v',
+      'Sysinternals - www.sysinternals.com',
+      'Copyright (C)',
+      'Starting PsExec service on',
+      'Connecting with PsExec service on',
+      'PsExec service on',
+      'Connecting to',
+      'Starting cmd on',
+      'Copying authentication key to',
+      'exited on', 
+      'with error code',
+      'cmd exited on'
+    ];
+
+    const lines = raw.split(/\r?\n/);
+    const filtered = lines.filter(line => {
+      const l = line.trim();
+      if (!l) return false;
+      
+      // Prompt removal (e.g., C:\> or C:\Windows\system32>)
+      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
+
+      // Banner filtering
+      // Só removemos se a linha PARECER um banner, não se contiver apenas a palavra
+      // Se a linha for idêntica a um keyword ou começar com ele (comum para headers)
+      // Mas permitimos se a linha tiver dados úteis e apenas contiver a palavra (raro em banners)
+      const isBanner = bannerKeywords.some(kw => {
+        const lowerL = l.toLowerCase();
+        const lowerKw = kw.toLowerCase();
+        // Se a linha começa com o banner (PsExec v, Connecting to...)
+        if (lowerL.startsWith(lowerKw)) return true;
+        // Se a linha contém Copyright ou Sysinternals (geralmente banners inteiros)
+        if (lowerKw.includes('copyright') || lowerKw.includes('sysinternals')) {
+            if (lowerL.includes(lowerKw)) return true;
+        }
+        return false;
+      });
+
+      if (isBanner) return false;
+      
+      return true;
+    });
+
+    return filtered.join('\n').trim();
   }
 
   // Vite integration
