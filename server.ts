@@ -69,43 +69,33 @@ async function winExecute(options: {
         stdio: ['ignore', 'pipe', 'pipe']
       });
       
-      const stdoutChunks: Buffer[] = [];
-      const stderrChunks: Buffer[] = [];
-      let stdoutEnded = false;
-      let stderrEnded = false;
-      let exitCode: number | null = null;
-      let processClosed = false;
+      const chunks: Buffer[] = [];
+      const timeout = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('Processo demorou muito para responder'));
+      }, 60000); // 60s timeout for each step
 
-      const checkResolved = () => {
-        if (processClosed && stdoutEnded && stderrEnded) {
-          let out = '';
-          if (capture) {
-            const combined = Buffer.concat([...stdoutChunks, ...stderrChunks]);
-            out = iconv.decode(combined, 'cp850');
-            if (!out.trim() && combined.length > 0) {
-              out = iconv.decode(combined, 'utf-8');
-            }
-          }
-          resolve({ out, code: exitCode });
-        }
-      };
-
-      child.stdout.on('data', (d) => { if (capture) stdoutChunks.push(d); });
-      child.stdout.on('end', () => { stdoutEnded = true; checkResolved(); });
-
-      child.stderr.on('data', (d) => { if (capture) stderrChunks.push(d); });
-      child.stderr.on('end', () => { stderrEnded = true; checkResolved(); });
+      child.stdout.on('data', (d) => { if (capture) chunks.push(d); });
+      child.stderr.on('data', (d) => { if (capture) chunks.push(d); });
 
       child.on('close', (code) => {
-        exitCode = code;
-        processClosed = true;
-        checkResolved();
+        clearTimeout(timeout);
+        let out = '';
+        if (capture) {
+          const combined = Buffer.concat(chunks);
+          // Try CP850 (cmd legacy), then UTF-8
+          out = iconv.decode(combined, 'cp850');
+          if (!out.trim() && combined.length > 0) {
+            out = iconv.decode(combined, 'utf-8');
+          }
+          // Remove null bytes that might interrupt text rendering
+          out = out.replace(/\0/g, '');
+        }
+        resolve({ out, code });
       });
 
       child.on('error', (err) => {
-        processClosed = true;
-        stdoutEnded = true;
-        stderrEnded = true;
+        clearTimeout(timeout);
         reject(err);
       });
     });
@@ -138,12 +128,13 @@ async function winExecute(options: {
       await runSingle(createCmd, false);
 
       // Give Windows more time to flush the file to disk and release locks
-      await sleep(3000);
+      await sleep(5000);
 
       // 2. READ FILE
       console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
       const readCmd = `${baseAuth} cmd /c "type ${remoteOutFile}"`;
       const readRes = await runSingle(readCmd, true);
+      console.log(`[READ INFO] ${host} bytes lidos: ${readRes.out.length}`);
 
       // 3. DELETE FILE (Detached Cleanup)
       console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
