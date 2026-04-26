@@ -66,7 +66,7 @@ async function winExecute(options: {
       fullCommand = `cmd /c "${command} > \\"${localOutFile}\\" 2>&1"`;
     } else {
       const psexecPath = path.join(process.cwd(), 'psexec.exe');
-      const remoteTemp = `C:\\out_${Math.floor(Math.random() * 10000)}.txt`;
+      const remoteTemp = `C:\\Windows\\Temp\\out_${Math.floor(Math.random() * 10000)}.txt`;
       
       // Construct the command using user-validated escaping for local shell
       // ^> and ^& ensure these are passed to PsExec, while > at the end is for local redirection
