@@ -18,9 +18,10 @@ const __dirname = path.dirname(__filename);
 const STORAGE_DIR = path.join(process.cwd(), 'data_storage');
 const DB_FILE = path.join(STORAGE_DIR, 'db.json');
 const SCRIPTS_DIR = path.join(process.cwd(), 'remote_scripts');
+const TEMP_BATCH_DIR = path.join(process.cwd(), 'temp_batches');
 
 // Ensure directories exist
-[STORAGE_DIR, SCRIPTS_DIR].forEach(dir => {
+[STORAGE_DIR, SCRIPTS_DIR, TEMP_BATCH_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     console.log(`[INIT] Diretório criado: ${dir}`);
@@ -54,7 +55,7 @@ async function winExecute(options: {
 }) {
   const { host, command, username, password, isScript } = options;
 
-  return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
+  return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>(async (resolve, reject) => {
     let executable = '';
     let args: string[] = [];
 
@@ -70,22 +71,53 @@ async function winExecute(options: {
       if (username) args.push('-u', username);
       if (password) args.push('-p', password);
 
-      // -h: elevated, -accepteula/-nobanner: clean
       args.push('-accepteula', '-nobanner', '-h'); 
 
       if (isScript) {
         args.push('-c', command); 
       } else {
-        // Strategic approach: Redirect all output to a unique remote temporary file,
-        // then read its content via 'type' and delete it. 
-        // We use the escaping pattern suggested by the user to avoid parsing issues.
-        const uniqueId = Math.floor(Math.random() * 10000);
-        const tempFile = `C:\\out_${uniqueId}.txt`;
+        const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 1000);
+        const localBatPath = path.join(TEMP_BATCH_DIR, `cmd_${uniqueId}.bat`);
+        const remoteOutFile = `C:\\psexec_temp_${uniqueId}.txt`;
         
-        // Construct the command string using the user's suggested format
-        // We pass this as a single string to cmd /c to let the shell handle the operators correctly
-        const fullRemoteCmd = `${command} ^> ${tempFile} 2^>^&1 ^& type ${tempFile} ^& del /f /q ${tempFile}`;
-        args.push('cmd', '/c', fullRemoteCmd);
+        const batContent = `@echo off\r\n${command} > "${remoteOutFile}" 2>&1\r\ntype "${remoteOutFile}"\r\ndel /f /q "${remoteOutFile}"`;
+        
+        try {
+          await fsp.writeFile(localBatPath, batContent);
+          args.push('-c', localBatPath);
+          
+          const cleanupLocal = () => fs.unlink(localBatPath, () => {});
+          
+          const child = spawn(executable, args, { shell: false, windowsHide: true });
+          let stdoutChunks: Buffer[] = [];
+          let stderrChunks: Buffer[] = [];
+
+          child.stdout.on('data', (d) => stdoutChunks.push(d));
+          child.stderr.on('data', (d) => stderrChunks.push(d));
+
+          const timer = setTimeout(() => {
+            child.kill();
+            cleanupLocal();
+            reject(new Error('Timeout de 60s excedido.'));
+          }, 60000);
+
+          child.on('close', (code) => {
+            clearTimeout(timer);
+            cleanupLocal();
+            const stdout = iconv.decode(Buffer.concat(stdoutChunks), 'cp850');
+            const stderr = iconv.decode(Buffer.concat(stderrChunks), 'cp850');
+            resolve({ stdout, stderr, exitCode: code });
+          });
+
+          child.on('error', (err) => {
+            clearTimeout(timer);
+            cleanupLocal();
+            reject(err);
+          });
+          return;
+        } catch (e) {
+          return reject(new Error('Falha ao criar script temporário.'));
+        }
       }
     }
 
