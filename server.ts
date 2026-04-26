@@ -60,14 +60,11 @@ async function winExecute(options: {
 
     const isLocal = host === 'localhost' || host === '127.0.0.1';
 
-    // Force UTF-8 communication with the remote/local shell
-    const wrappedCommand = `chcp 65001 > nul && ${command}`;
-
     if (isLocal) {
       executable = 'cmd.exe';
-      args = ['/c', wrappedCommand];
+      args = ['/c', command];
     } else {
-      executable = 'psexec'; 
+      executable = 'psexec.exe'; 
       args.push(`\\\\${host}`);
 
       if (username) args.push('-u', username);
@@ -78,14 +75,15 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command); 
       } else {
-        args.push('cmd', '/c', wrappedCommand);
+        // Run cmd /c to handle internal commands like ipconfig, qwinsta, etc.
+        args.push('cmd.exe', '/c', command);
       }
     }
 
     console.log(`[EXEC] Running: ${executable} ${args.join(' ')}`);
 
     const child = spawn(executable, args, {
-      shell: true,
+      shell: false,
       windowsHide: true,
     });
 
@@ -109,20 +107,20 @@ async function winExecute(options: {
     child.on('close', (code) => {
       clearTimeout(timer);
       
-      // Decode using CP850 (standard Windows CLI) or UTF-8 if chcp 65001 worked
       const stdoutRaw = Buffer.concat(stdoutChunks);
       const stderrRaw = Buffer.concat(stderrChunks);
       
-      // Try UTF-8 first (because of chcp 65001), fallback to CP850
-      let stdout = iconv.decode(stdoutRaw, 'utf-8');
-      let stderr = iconv.decode(stderrRaw, 'utf-8');
+      let stdout = iconv.decode(stdoutRaw, 'cp850');
+      let stderr = iconv.decode(stderrRaw, 'cp850');
 
       if (!stdout.trim() && stdoutRaw.length > 0) {
-        stdout = iconv.decode(stdoutRaw, 'cp850');
+        stdout = iconv.decode(stdoutRaw, 'utf-8');
       }
       if (!stderr.trim() && stderrRaw.length > 0) {
-        stderr = iconv.decode(stderrRaw, 'cp850');
+        stderr = iconv.decode(stderrRaw, 'utf-8');
       }
+
+      console.log(`[EXEC] Close Code: ${code} | Stdout: ${stdoutRaw.length} bytes | Stderr: ${stderrRaw.length} bytes`);
 
       resolve({ stdout, stderr, exitCode: code });
     });
@@ -149,8 +147,8 @@ function formatOutput(stdout: string, stderr: string): string {
     'connecting to',
     'connected to',
     'exited on',
-    'chcp 65001',
-    'psexec.exe'
+    'psexec.exe',
+    'microsoft (r) windows (r)'
   ];
 
   return combined.split('\n')
