@@ -2,18 +2,20 @@ import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
 import { Buffer } from 'buffer';
 
-const SOFTWARE_COMMAND_CSV = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths = @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and ($_.Publisher -notmatch 'Microsoft') -and ($_.DisplayName -notmatch '^Windows ') } | ForEach-Object { write-host \\"$($_.DisplayName)###$($_.DisplayVersion)###$($_.Publisher)\\" }"`;
+const SOFTWARE_SCRIPT = `$paths = @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and ($_.Publisher -notmatch 'Microsoft') -and ($_.DisplayName -notmatch \"^Windows \") } | ForEach-Object { write-host \"$($_.DisplayName)###$($_.DisplayVersion)###$($_.Publisher)\" }`;
 
 /**
  * Isolated execution logic for Software Management
  */
-async function softwareExec(host: string, command: string, user?: string, pass?: string): Promise<string> {
+async function softwareExec(host: string, script: string, user?: string, pass?: string): Promise<string> {
   const psexec = 'psexec.exe';
   const auth = [];
   if (user) auth.push('-u', user);
   if (pass) auth.push('-p', pass);
 
-  const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h', 'cmd', '/c', command];
+  // Use EncodedCommand to avoid escaping nightmares
+  const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
+  const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h', 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript];
 
   return new Promise((resolve, reject) => {
     const child = spawn(psexec, args, { shell: false, windowsHide: true });
@@ -69,8 +71,8 @@ function parseSoftwareOutput(raw: string): any[] {
 
 export async function getRemoteSoftware(host: string, user?: string, pass?: string): Promise<any[]> {
   try {
-    console.log(`[SOFT_ISOLATED] Querying ${host} via CSV method`);
-    const rawOutput = await softwareExec(host, SOFTWARE_COMMAND_CSV, user, pass);
+    console.log(`[SOFT_ISOLATED] Querying ${host} via PowerShell EncodedCommand`);
+    const rawOutput = await softwareExec(host, SOFTWARE_SCRIPT, user, pass);
     const apps = parseSoftwareOutput(rawOutput);
     console.log(`[SOFT_ISOLATED] Success. ${apps.length} apps found for ${host}`);
     return apps;
@@ -81,11 +83,11 @@ export async function getRemoteSoftware(host: string, user?: string, pass?: stri
 }
 
 export async function uninstallRemoteSoftware(host: string, appName: string, user?: string, pass?: string): Promise<boolean> {
-  const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*') -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '${appName}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace 'msiexec.exe?\\s*/[iI]', 'msiexec.exe /x'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
+  const uninstallScript = `$app = Get-ItemProperty @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*') -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '${appName}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace 'msiexec.exe?\\s*/[iI]', 'msiexec.exe /x'; & cmd.exe /c $cmd /quiet /norestart }`;
 
   try {
     console.log(`[SOFT_ISOLATED] Uninstalling "${appName}" on ${host}`);
-    await softwareExec(host, uninstallCmd, user, pass);
+    await softwareExec(host, uninstallScript, user, pass);
     return true;
   } catch (err) {
     console.error(`[SOFT_ISOLATED_ERROR] ${host}:`, err);
