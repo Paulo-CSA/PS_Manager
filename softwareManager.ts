@@ -1,18 +1,22 @@
 import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
 import { Buffer } from 'buffer';
+import fs from 'fs';
+import path from 'path';
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const SOFTWARE_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
 
 $paths = @(
-    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+    "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
 )
 
 # HKU (todos usuários)
 $hkuPaths = Get-ChildItem Registry::HKEY_USERS | ForEach-Object {
-    "$($_.Name)\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"
+    $_.PSPath + "\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
 }
 
 $paths += $hkuPaths
@@ -30,54 +34,106 @@ foreach ($path in $paths) {
         }
     }
 }
+
+# Fonte: Microsoft Store (para apps como BreeZip)
+if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+    Get-AppxPackage | Where-Object { $_.IsFramework -eq $false -and $_.Name -notmatch 'Microsoft\.' } | ForEach-Object {
+        Write-Output "$($_.Name)###$($_.Version)###Microsoft Store"
+    }
+}
 `;
 
 /**
  * Isolated execution logic for Software Management
+ * Uses output redirection to a file on the remote machine for maximum reliability
  */
 async function softwareExec(host: string, script: string, user?: string, pass?: string): Promise<string> {
   const psexec = 'psexec.exe';
   const auth = [];
   if (user) auth.push('-u', user);
   if (pass) auth.push('-p', pass);
+  const baseArgs = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h'];
 
-  // Use EncodedCommand to avoid escaping nightmares
-  const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
-  const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h', 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedScript];
+  const uniqueId = Math.floor(Math.random() * 100000);
+  const remoteFile = `C:\\Windows\\Temp\\sw_${uniqueId}.txt`;
+  const smbPath = `\\\\${host}\\C$\\Windows\\Temp\\sw_${uniqueId}.txt`;
 
-  return new Promise((resolve, reject) => {
-    const child = spawn(psexec, args, { shell: false, windowsHide: true });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+  const runPsExec = (args: string[], capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
+    return new Promise((resolve, reject) => {
+      const child = spawn(psexec, args, { shell: false, windowsHide: true });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let outEnded = false;
+      let errEnded = false;
+      let exited = false;
+      let exitCode: number | null = null;
 
-    child.stdout.on('data', (d) => stdoutChunks.push(d));
-    child.stderr.on('data', (d) => stderrChunks.push(d));
+      const attemptResolve = () => {
+        if (exited && (outEnded || !capture) && (errEnded || !capture)) {
+          clearTimeout(timeout);
+          const out = capture ? iconv.decode(Buffer.concat(stdoutChunks), 'cp850').replace(/\0/g, '') : '';
+          const err = capture ? iconv.decode(Buffer.concat(stderrChunks), 'cp850').replace(/\0/g, '') : '';
+          resolve({ out, err, code: exitCode });
+        }
+      };
 
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error('Timeout na execução do comando (PsExec)'));
-    }, 300000);
+      const timeout = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error('Timeout na execução remota'));
+      }, 120000);
 
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      const buf = Buffer.concat(stdoutChunks);
-      let out = iconv.decode(buf, 'cp850');
-      if (!out.trim() && buf.length > 0) out = iconv.decode(buf, 'utf-8');
-      
-      const errBuf = Buffer.concat(stderrChunks);
-      const errOut = iconv.decode(errBuf, 'cp850');
-      if (errOut.trim()) {
-        console.warn(`[SOFT_EXEC_WARN] Stderr for ${host}:`, errOut);
+      if (capture) {
+        child.stdout.on('data', d => stdoutChunks.push(d));
+        child.stdout.on('end', () => { outEnded = true; attemptResolve(); });
+        child.stderr.on('data', d => stderrChunks.push(d));
+        child.stderr.on('end', () => { errEnded = true; attemptResolve(); });
       }
 
-      resolve(out.replace(/\0/g, ''));
-    });
+      child.on('close', code => {
+        exitCode = code;
+        exited = true;
+        if (!capture) { outEnded = true; errEnded = true; }
+        attemptResolve();
+      });
 
-    child.on('error', (err) => {
-      clearTimeout(timeout);
-      reject(err);
+      child.on('error', err => {
+        clearTimeout(timeout);
+        reject(err);
+      });
     });
-  });
+  };
+
+  try {
+    // 1. Execute PowerShell script and redirect to file
+    const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
+    const cmd = `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedScript} > ${remoteFile} 2>&1`;
+    
+    console.log(`[SOFT_EXEC] redirecting to ${remoteFile} on ${host}`);
+    await runPsExec([...baseArgs, 'cmd', '/c', cmd], false);
+    
+    await sleep(2000);
+
+    // 2. Read output
+    let finalOutput = '';
+    if (fs.existsSync(smbPath)) {
+      console.log(`[SOFT_EXEC] Reading via SMB: ${smbPath}`);
+      const buf = fs.readFileSync(smbPath);
+      finalOutput = iconv.decode(buf, 'cp850');
+      if (!finalOutput.trim() && buf.length > 0) finalOutput = iconv.decode(buf, 'utf-8');
+    } else {
+      console.log(`[SOFT_EXEC] Falling back to remote read`);
+      const readRes = await runPsExec([...baseArgs, 'cmd', '/c', `type ${remoteFile}`], true);
+      finalOutput = readRes.out;
+    }
+
+    // 3. Cleanup
+    spawn(psexec, [...baseArgs, 'cmd', '/c', `del /f /q ${remoteFile}`], { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
+
+    return finalOutput.replace(/\0/g, '');
+  } catch (err: any) {
+    console.error(`[SOFT_EXEC_ERROR] ${host}:`, err.message);
+    throw err;
+  }
 }
 
 /**
