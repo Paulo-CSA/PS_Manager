@@ -5,6 +5,8 @@ import { Buffer } from 'buffer';
 const SOFTWARE_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
 
+$results = @()
+
 # Fonte 1: Registro
 $regPaths = @(
     'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
@@ -13,29 +15,55 @@ $regPaths = @(
 )
 
 foreach ($path in $regPaths) {
-    Get-ItemProperty $path | ForEach-Object {
-        if ($_.DisplayName) {
-            $name = $_.DisplayName
-            $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
-            $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
-            Write-Output "$name###$ver###$pub"
+    $items = Get-ItemProperty $path
+    foreach ($item in $items) {
+        if ($item.DisplayName) {
+            $results += [PSCustomObject]@{
+                Name = $item.DisplayName
+                Version = if ($item.DisplayVersion) { $item.DisplayVersion } else { "---" }
+                Publisher = if ($item.Publisher) { $item.Publisher } else { "---" }
+            }
         }
     }
 }
 
-# Fonte 2: WMI
+# Fonte 2: WMI (Win32_Product) - Usado com cautela
 Get-WmiObject Win32_Product | ForEach-Object {
     if ($_.Name) {
-        Write-Output "$($_.Name)###$($_.Version)###$($_.Vendor)"
+        $results += [PSCustomObject]@{
+            Name = $_.Name
+            Version = if ($_.Version) { $_.Version } else { "---" }
+            Publisher = if ($_.Vendor) { $_.Vendor } else { "---" }
+        }
     }
 }
 
-# Fonte 3: Get-Package
+# Fonte 3: Get-AppxPackage (Microsoft Store Apps - BreeZip, etc)
+if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+    Get-AppxPackage | ForEach-Object {
+        $results += [PSCustomObject]@{
+            Name = $_.Name
+            Version = $_.Version
+            Publisher = "Microsoft Store"
+        }
+    }
+}
+
+# Fonte 4: Get-Package
 if (Get-Command Get-Package -ErrorAction SilentlyContinue) {
     Get-Package | ForEach-Object {
-        if ($_.Name) {
-             Write-Output "$($_.Name)###$($_.Version)###$($_.Publisher)"
+        $results += [PSCustomObject]@{
+            Name = $_.Name
+            Version = $_.Version
+            Publisher = if ($_.Publisher) { $_.Publisher } else { "---" }
         }
+    }
+}
+
+# Remover duplicados e formatar saída
+$results | Sort-Object Name -Unique | ForEach-Object {
+    if ($_.Name) {
+        Write-Output "$($_.Name)###$($_.Version)###$($_.Publisher)"
     }
 }
 `;
