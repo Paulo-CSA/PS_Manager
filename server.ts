@@ -7,7 +7,7 @@ import bodyParser from 'body-parser';
 import cors from 'cors';
 import fs from 'fs';
 import fsp from 'fs/promises';
-import { spawn, execFile } from 'child_process';
+import { spawn, execFile, exec } from 'child_process';
 import iconv from 'iconv-lite';
 import { Buffer } from 'buffer';
 
@@ -47,6 +47,37 @@ async function writeDb(data: any) {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
+ * Robust execution using exec instead of spawn to leverage built-in buffering.
+ */
+function runWithExec(cmd: string): Promise<{ out: string; err: string; code: number | null }> {
+  return new Promise((resolve) => {
+    console.log(`[EXEC_CMD] ${cmd}`);
+    exec(cmd, { 
+      maxBuffer: 1024 * 1024 * 100, // 100 MB buffer
+      encoding: 'buffer',
+      windowsHide: true,
+    }, (error, stdout, stderr) => {
+      const code = error ? (error.code as number || 1) : 0;
+      
+      const decode = (b: any) => {
+        if (!b || b.length === 0) return '';
+        const buf = Buffer.from(b);
+        // Try Windows legacy first, then fallback to UTF-8
+        let s = iconv.decode(buf, 'cp850');
+        if (!s.trim() && buf.length > 0) s = iconv.decode(buf, 'utf-8');
+        return s.replace(/\0/g, ''); // Remove null bytes
+      };
+
+      resolve({
+        out: decode(stdout),
+        err: decode(stderr),
+        code
+      });
+    });
+  });
+}
+
+/**
  * Robust execution engine for Windows.
  * Handles PsExec and direct CMD execution for localhost.
  * Executes in 3 stages for remote machines: 1. Create, 2. Read, 3. Cleanup.
@@ -61,137 +92,44 @@ async function winExecute(options: {
   const { host, command, username, password, isScript } = options;
   const isLocal = host === 'localhost' || host === '127.0.0.1';
 
-  // Robust spawn-based execution to capture full output chunks
-  const runArgs = (executable: string, args: string[], capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
-    return new Promise((resolve, reject) => {
-      console.log(`[SPAWN] ${executable} ${args.join(' ')}`);
-      
-      const child = spawn(executable, args, { 
-        shell: false, 
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      
-      const stdoutChunks: Buffer[] = [];
-      const stderrChunks: Buffer[] = [];
-      let stdoutEnded = false;
-      let stderrEnded = false;
-      let processExited = false;
-      let exitCode: number | null = null;
-
-      const attemptResolve = () => {
-        // Only resolve when process is closed AND both streams have ended
-        if (processExited && stdoutEnded && stderrEnded) {
-          clearTimeout(timeout);
-          let out = '';
-          let err = '';
-
-          if (capture) {
-            const decodeBuffer = (buf: Buffer) => {
-              if (!buf || buf.length === 0) return '';
-              // Detect UTF-16
-              if (buf.length >= 2 && ((buf[0] === 0xFF && buf[1] === 0xFE) || (buf[0] === 0xFE && buf[1] === 0xFF))) {
-                   return iconv.decode(buf, 'utf16');
-              }
-              // Standard CMD encoding
-              let decoded = iconv.decode(buf, 'cp850');
-              if (!decoded.trim() && buf.length > 0) {
-                decoded = iconv.decode(buf, 'utf-8');
-              }
-              return decoded.replace(/\0/g, ''); 
-            };
-
-            out = decodeBuffer(Buffer.concat(stdoutChunks));
-            err = decodeBuffer(Buffer.concat(stderrChunks));
-          }
-
-          resolve({ out, err, code: exitCode });
-        }
-      };
-      
-      const timeout = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`Timeout na execução (${executable})`));
-      }, 300000); // 5 minutes timeout
-
-      if (capture) {
-        child.stdout.on('data', (chunk: Buffer) => {
-          stdoutChunks.push(chunk);
-        });
-        child.stdout.on('end', () => {
-          stdoutEnded = true;
-          attemptResolve();
-        });
-
-        child.stderr.on('data', (chunk: Buffer) => {
-          stderrChunks.push(chunk);
-        });
-        child.stderr.on('end', () => {
-          stderrEnded = true;
-          attemptResolve();
-        });
-      } else {
-        stdoutEnded = true;
-        stderrEnded = true;
-      }
-
-      child.on('close', (code) => {
-        exitCode = code;
-        processExited = true;
-        attemptResolve();
-      });
-
-      child.on('error', (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-    });
-  };
-
   if (isLocal) {
     console.log(`[EXEC] Local | Command: ${command}`);
-    const res = await runArgs('cmd.exe', ['/c', command], true);
+    const res = await runWithExec(`cmd /c "${command}"`);
     return { stdout: res.out, stderr: res.err, exitCode: res.code };
   }
 
   const psexec = 'psexec.exe';
-  const baseArgs = [`\\\\${host}`];
-  if (username) {
-    baseArgs.push('-u', username);
-  }
-  if (password) {
-    baseArgs.push('-p', password);
-  }
-  baseArgs.push('-accepteula', '-nobanner', '-h');
+  const authStr = `${username ? `-u "${username}"` : ''} ${password ? `-p "${password}"` : ''}`;
+  const baseAuth = `${psexec} \\\\${host} ${authStr} -accepteula -nobanner -h`;
 
   try {
     if (isScript) {
       console.log(`[EXEC] ${host} | Script: ${command}`);
-      const res = await runArgs(psexec, [...baseArgs, '-c', command], true);
+      const res = await runWithExec(`${baseAuth} -c "${command}"`);
       return { stdout: res.out, stderr: res.err, exitCode: res.code };
     } else {
       const uniqueId = Math.floor(Math.random() * 100000);
       const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
 
-      // 1. CREATE FILE
+      // 1. CREATE FILE (Use PowerShell for more robust redirection)
       console.log(`[EXEC] ${host} [STEP 1] Criando: ${remoteOutFile}`);
-      const createArgs = [...baseArgs, 'cmd', '/c', `(${command}) > ${remoteOutFile} 2>&1`].filter(v => v !== '');
-      await runArgs(psexec, createArgs, false);
+      const createCmd = `${baseAuth} cmd /c "(${command}) > ${remoteOutFile} 2>&1"`;
+      await runWithExec(createCmd);
 
-      await sleep(10000);
+      // Wait for flush
+      await sleep(5000);
 
-      // 2. READ FILE
+      // 2. READ FILE (Using PowerShell to read the entire file into memory before sending)
       console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
-      // Simple 'type' is usually sufficient if we capture buffers correctly
-      const readArgs = [...baseArgs, 'cmd', '/c', `type ${remoteOutFile}`].filter(v => v !== '');
-      const readRes = await runArgs(psexec, readArgs, true);
+      const readCmd = `${baseAuth} powershell -NoProfile -Command "If(Test-Path '${remoteOutFile}') { [IO.File]::ReadAllText('${remoteOutFile}') } Else { Write-Error 'File not found' }"`;
+      const readRes = await runWithExec(readCmd);
       
-      console.log(`[READ INFO] ${host} bytes lidos: ${readRes.out.length}`);
+      console.log(`[READ INFO] ${host} chars lidos: ${readRes.out.length}`);
 
-      // 3. DELETE FILE (Detached Cleanup)
+      // 3. DELETE FILE (Cleanup)
       console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
-      const cleanupArgs = [...baseArgs, 'cmd', '/c', `ping 127.0.0.1 -n 15 >nul & del /f /q ${remoteOutFile}`].filter(v => v !== '');
-      spawn(psexec, cleanupArgs, { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
+      const cleanupCmd = `${baseAuth} cmd /c "ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}"`;
+      spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
 
       return { stdout: readRes.out, stderr: readRes.err, exitCode: readRes.code };
     }
