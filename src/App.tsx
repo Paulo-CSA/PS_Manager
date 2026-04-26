@@ -69,7 +69,7 @@ const App = () => {
   const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
   const [customCommand, setCustomCommand] = useState('');
   const [ipConfig, setIpConfig] = useState({ ip: '', mask: '255.255.255.0', gw: '' });
-  const [installedApps, setInstalledApps] = useState<string[]>([]);
+  const [installedApps, setInstalledApps] = useState<any[]>([]);
   const [tempExecHost, setTempExecHost] = useState<string[] | null>(null);
   
   const [verboseMode, setVerboseMode] = useState(false);
@@ -355,34 +355,56 @@ const App = () => {
       return;
     }
     const host = selectedHosts[0];
-    setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
+    setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos via registro em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    const results = await executeRemote(`powershell -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -ne $null } | Select-Object -ExpandProperty DisplayName"`, [host]);
-    setIsWaitModalOpen(false);
-
-    if (results && results[0]) {
-      const apps = results[0].output.split('\n')
-        .map((a: string) => a.trim())
-        .filter((a: string) => 
-          a && 
-          !a.includes('Name') && 
-          !a.includes('----') &&
-          !a.includes('[') &&
-          !a.startsWith('Success')
-        );
-      setInstalledApps(Array.from(new Set(apps)).sort());
-      setIsAppModalOpen(true);
+    try {
+      const res = await fetch('/api/apps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.apps) {
+        setInstalledApps(data.apps);
+        setIsAppModalOpen(true);
+        setLog(prev => [...prev, `[SYSTEM] ${data.apps.length} aplicativos encontrados em ${host}.`]);
+      } else {
+        setLog(prev => [...prev, `[ERROR] Falha ao listar apps: ${data.error || 'Erro desconhecido'}`]);
+      }
+    } catch (err) {
+      setLog(prev => [...prev, `[ERROR] Erro de rede ao listar apps.`]);
+    } finally {
+      setIsWaitModalOpen(false);
     }
   };
 
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    // Comando via PowerShell para desinstalação via DisplayName (UninstallString)
-    const uninstallCmd = `powershell -Command "$app = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { Start-Process cmd.exe -ArgumentList '/c', $app.UninstallString, '/quiet', '/norestart' -Wait }"`;
-    await executeRemote(uninstallCmd, [host]);
-    setIsAppModalOpen(false);
+    setLog(prev => [...prev, `[SYSTEM] Solicitando desinstalação de "${appName}" em ${host}...`]);
+    setIsWaitModalOpen(true);
+
+    try {
+      const res = await fetch('/api/apps/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, appName })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        setLog(prev => [...prev, `[SYSTEM] Comando de desinstalação enviado com sucesso para ${host}.`]);
+        setIsAppModalOpen(false);
+      } else {
+        setLog(prev => [...prev, `[ERROR] Falha ao desinstalar: ${data.error || 'Erro no PsExec'}`]);
+      }
+    } catch (err) {
+      setLog(prev => [...prev, `[ERROR] Erro de rede ao desinstalar.`]);
+    } finally {
+      setIsWaitModalOpen(false);
+    }
   };
 
   const openTerminal = (host: string) => {
@@ -1050,18 +1072,29 @@ const App = () => {
                 </button>
               </div>
               
-              <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
+                <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[10px] font-mono text-gray-500 uppercase tracking-widest border-b border-white/5">
+                  <div className="col-span-6">Nome</div>
+                  <div className="col-span-2">Versão</div>
+                  <div className="col-span-3">Publicador</div>
+                  <div className="col-span-1"></div>
+                </div>
                 {installedApps.length === 0 ? (
                   <p className="text-center text-gray-500 py-12">Nenhum aplicativo encontrado ou erro na listagem.</p>
                 ) : installedApps.map((app, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-xl hover:bg-white/10 transition-all group">
-                    <span className="text-sm font-medium">{app}</span>
-                    <button 
-                      onClick={() => uninstallApp(app)}
-                      className="px-3 py-1 bg-red-500/10 text-red-500 text-[10px] font-bold rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all transform hover:scale-105"
-                    >
-                      DESINSTALAR
-                    </button>
+                  <div key={i} className="grid grid-cols-12 gap-2 items-center p-3 bg-white/5 border border-white/5 rounded-xl hover:bg-white/10 transition-all group">
+                    <div className="col-span-6 text-xs font-medium truncate" title={app.Name}>{app.Name}</div>
+                    <div className="col-span-2 text-[10px] font-mono text-gray-500">{app.Version || '---'}</div>
+                    <div className="col-span-3 text-[10px] text-gray-400 truncate">{app.Publisher || '---'}</div>
+                    <div className="col-span-1 flex justify-end">
+                      <button 
+                        onClick={() => uninstallApp(app.Name)}
+                        className="p-1.5 bg-red-500/10 text-red-500 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all transform hover:scale-105"
+                        title="Desinstalar"
+                      >
+                        <Trash size={14} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

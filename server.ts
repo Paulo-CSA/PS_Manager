@@ -192,6 +192,84 @@ function formatOutput(stdout: string, stderr: string): string {
   return combined;
 }
 
+// --- Software Management (Isolated) ---
+const SOFTWARE_REGISTRY_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+$paths = @(
+    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+)
+$apps = Get-ItemProperty $paths -ErrorAction SilentlyContinue | 
+    Where-Object { $_.DisplayName -ne $null } | 
+    Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}} |
+    Sort-Object Name
+$apps | ConvertTo-Json -Compress
+"`;
+
+async function getRemoteSoftware(host: string, user?: string, pass?: string): Promise<any[]> {
+  const psexec = 'psexec.exe';
+  const auth = [];
+  if (user) auth.push('-u', user);
+  if (pass) auth.push('-p', pass);
+  
+  const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h', 'cmd', '/c', SOFTWARE_REGISTRY_COMMAND];
+
+  return new Promise((resolve) => {
+    console.log(`[SOFTWARE_QUERY] ${host}`);
+    const child = spawn(psexec, args, { shell: false, windowsHide: true });
+    
+    const chunks: Buffer[] = [];
+    child.stdout.on('data', (d) => chunks.push(d));
+    
+    child.on('close', () => {
+      try {
+        const raw = iconv.decode(Buffer.concat(chunks), 'cp850');
+        const lines = raw.split('\n');
+        let jsonStr = '';
+        let capturing = false;
+        
+        for (const line of lines) {
+          if (line.trim().startsWith('[') || line.trim().startsWith('{')) capturing = true;
+          if (capturing) jsonStr += line;
+        }
+
+        if (!jsonStr.trim()) {
+          resolve([]);
+          return;
+        }
+
+        const data = JSON.parse(jsonStr);
+        resolve(Array.isArray(data) ? data : [data]);
+      } catch (e) {
+        console.error(`[SOFTWARE_ERROR] ${host}:`, e);
+        resolve([]);
+      }
+    });
+
+    child.on('error', () => resolve([]));
+    setTimeout(() => { child.kill('SIGKILL'); resolve([]); }, 60000);
+  });
+}
+
+async function uninstallRemoteSoftware(host: string, appName: string, user?: string, pass?: string): Promise<boolean> {
+  const psexec = 'psexec.exe';
+  const auth = [];
+  if (user) auth.push('-u', user);
+  if (pass) auth.push('-p', pass);
+
+  const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*') -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '${appName}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace 'msiexec.exe?\\s*/[iI]', 'msiexec.exe /x'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
+
+  const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h', 'cmd', '/c', uninstallCmd];
+
+  return new Promise((resolve) => {
+    console.log(`[SOFTWARE_UNINSTALL] ${appName} on ${host}`);
+    const child = spawn(psexec, args, { shell: false, windowsHide: true });
+    child.on('close', (code) => resolve(code === 0));
+    child.on('error', () => resolve(false));
+    setTimeout(() => { child.kill('SIGKILL'); resolve(false); }, 120000);
+  });
+}
+
 async function startServer() {
   const app = express();
   const port = Number(process.env.PORT) || 3000;
@@ -324,6 +402,36 @@ async function startServer() {
       res.json({ output: formatOutput(result.stdout, result.stderr) });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Falha na conexão remota' });
+    }
+  });
+
+  app.post('/api/apps', async (req, res) => {
+    const { host } = req.body;
+    const db = await readDb();
+    const { username, password } = db.credentials;
+
+    if (!host) return res.status(400).json({ error: 'Host é obrigatório' });
+
+    try {
+      const apps = await getRemoteSoftware(host, username, password);
+      res.json({ apps });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Falha ao buscar inventário de software' });
+    }
+  });
+
+  app.post('/api/apps/uninstall', async (req, res) => {
+    const { host, appName } = req.body;
+    const db = await readDb();
+    const { username, password } = db.credentials;
+
+    if (!host || !appName) return res.status(400).json({ error: 'Host e Nome do App são obrigatórios' });
+
+    try {
+      const success = await uninstallRemoteSoftware(host, appName, username, password);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Falha ao desinstalar aplicativo' });
     }
   });
 
