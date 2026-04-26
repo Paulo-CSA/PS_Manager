@@ -234,28 +234,23 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // Determinamos a melhor forma de chamar o comando
-      let fullCmd;
-      if (command.toLowerCase().includes('powershell')) {
-          // Para powershell, evitamos o cmd /c se possível para não quebrar pipes
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula ${command}`;
-      } else {
-          // No Windows, envolvemos o comando em aspas para o CMD
-          const escapedCommand = command.replace(/"/g, '""');
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula cmd /c "${escapedCommand}"`;
-      }
+      // Priority: -accepteula first, -h for elevation, -s for system (optional but -h is safer with provided creds)
+      const escapedCommand = command.replace(/"/g, '""');
+      const fullCmd = `psexec -accepteula \\\\${host} -u ${username} -p ${password} -h cmd /c "${escapedCommand}"`;
       
-      console.log(`[SHELL_WIN] ${fullCmd}`);
+      console.log(`[SHELL_REMOTO] ${fullCmd}`);
 
-      const { stdout, stderr } = await execWin(fullCmd, 45000);
-      const rawOutput = [stdout, stderr].filter(Boolean).join('\n');
-      const output = cleanOutput(rawOutput) || 'Comando executado com sucesso (sem retorno).';
+      const { stdout, stderr } = await execWin(fullCmd, 60000);
+      
+      let combined = stdout || '';
+      if (stderr) {
+        combined += (combined ? '\n\n--- [LOGS DE SISTEMA] ---\n' : '') + stderr;
+      }
 
-      res.json({ output });
+      res.json({ output: cleanOutput(combined) || 'Executado (Sem retorno).' });
     } catch (err: any) {
-      const rawError = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
-      const cleaned = cleanOutput(rawError);
-      res.status(500).json({ error: cleaned || 'Erro na conexão PsExec' });
+      const errorMsg = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
+      res.status(500).json({ error: cleanOutput(errorMsg) });
     }
   });
 
@@ -267,25 +262,26 @@ async function startServer() {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            let fullCmd;
-            if (command.toLowerCase().includes('powershell')) {
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula ${command}`;
-            } else {
-                const escapedCommand = command.replace(/"/g, '""');
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula cmd /c "${escapedCommand}"`;
-            }
+            const escapedCommand = command.replace(/"/g, '""');
+            // Standardizing to high-compatibility elevated remote exec
+            const fullCmd = `psexec -accepteula \\\\${host} -u ${username} -p ${password} -h cmd /c "${escapedCommand}"`;
             
             console.log(`[EXEC_WIN] ${fullCmd}`);
 
             const { stdout, stderr } = await execWin(fullCmd, 60000);
-            const rawOutput = [stdout, stderr].filter(Boolean).join('\n');
-            const cleaned = cleanOutput(rawOutput);
             
-            return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
+            let combined = stdout || '';
+            if (stderr) {
+              combined += (combined ? '\n\n--- [LOGS DE SISTEMA] ---\n' : '') + stderr;
+            }
+            
+            const cleaned = cleanOutput(combined);
+            return { host, status: 'success', output: cleaned || 'Executado (Sem retorno de texto).' };
           } else {
             // Local fallback
             const { stdout, stderr } = await execWin(command);
-            return { host, status: 'success', output: [stdout, stderr].filter(Boolean).join('\n') };
+            const combined = [stdout, stderr].filter(Boolean).join('\n');
+            return { host, status: 'success', output: cleanOutput(combined) };
           }
         } catch (err: any) {
           const rawError = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
