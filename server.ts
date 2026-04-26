@@ -196,14 +196,17 @@ function formatOutput(stdout: string, stderr: string): string {
 const SOFTWARE_REGISTRY_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
 $paths = @(
     'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
-$results = foreach ($path in $paths) {
-    Get-ItemProperty $path -ErrorAction SilentlyContinue | 
-    Select-Object @{n='Name';e={if($_.DisplayName){$_.DisplayName}else{$_.PSChildName}}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}}, @{n='Id';e={$_.PSChildName}}
-}
-$results | Where-Object { $_.Name -ne $null } | Sort-Object Name | ConvertTo-Json -Compress
+Get-ItemProperty $paths -ErrorAction SilentlyContinue | 
+Where-Object { 
+    $_.DisplayName -and 
+    ($_.Publisher -notmatch 'Microsoft') -and 
+    ($_.DisplayName -notmatch 'Microsoft') 
+} | 
+Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}}, @{n='Id';e={$_.PSChildName}} |
+Sort-Object Name | 
+ConvertTo-Json -Compress
 "`;
 
 async function getRemoteSoftware(host: string, user?: string, pass?: string): Promise<any[]> {
