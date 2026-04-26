@@ -16,10 +16,7 @@ foreach ($path in $paths) {
             $name = $item.DisplayName
             $ver = if ($item.DisplayVersion) { $item.DisplayVersion } else { "---" }
             $pub = if ($item.Publisher) { $item.Publisher } else { "---" }
-            # Filter Microsoft-labeled apps to reduce clutter as requested before
-            if ($pub -notmatch "Microsoft" -and $name -notmatch "^Windows") {
-                Write-Output "$name###$ver###$pub"
-            }
+            Write-Host "$name###$ver###$pub"
         }
     }
 }
