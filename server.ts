@@ -55,74 +55,34 @@ async function winExecute(options: {
 }) {
   const { host, command, username, password, isScript } = options;
 
-  return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>(async (resolve, reject) => {
-    let executable = '';
-    let args: string[] = [];
-
+  return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
     const isLocal = host === 'localhost' || host === '127.0.0.1';
+    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 1000);
+    const localOutFile = path.join(STORAGE_DIR, `out_${uniqueId}.txt`);
+
+    let fullCommand = '';
 
     if (isLocal) {
-      executable = 'cmd.exe';
-      args = ['/c', command];
+      fullCommand = `cmd /c "${command} > \\"${localOutFile}\\" 2>&1"`;
     } else {
-      executable = 'psexec.exe'; 
-      args.push(`\\\\${host}`);
-
-      if (username) args.push('-u', username);
-      if (password) args.push('-p', password);
-
-      args.push('-accepteula', '-nobanner', '-h'); 
-
-      if (isScript) {
-        args.push('-c', command); 
-      } else {
-        // Relying on server-side local redirection to capture PsExec output reliably.
-        args.push('cmd', '/c', command);
-      }
-    }
-
-    // Construct the command to run ON THE REMOTE MACHINE
-    const remoteId = Math.floor(Math.random() * 100000);
-    const remoteOutFile = `C:\\out_${remoteId}.txt`;
-    
-    // Remote command block: executes user cmd, redirects to file, types it, waits, then deletes.
-    // We use parenthesized block for clean redirection.
-    const remoteCommandBlock = `cmd /c "(${command}) > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 15 /nobreak > nul & del /f /q ${remoteOutFile}"`;
-
-    // Strategy: Build the PsExec args
-    if (host === 'localhost' || host === '127.0.0.1') {
-      executable = 'cmd.exe';
-      args = ['/c', command];
-    } else {
-      executable = path.join(process.cwd(), 'psexec.exe');
-      args.push(`\\\\${host}`);
-      if (username) args.push('-u', username);
-      if (password) args.push('-p', password);
-      args.push('-accepteula', '-nobanner', '-h');
+      const psexecPath = path.join(process.cwd(), 'psexec.exe');
+      const remoteTemp = `C:\\out_${Math.floor(Math.random() * 10000)}.txt`;
       
-      if (isScript) {
-        args.push('-c', command);
-      } else {
-        args.push('cmd', '/c', remoteCommandBlock);
-      }
+      // Construct the command using user-validated escaping for local shell
+      // ^> and ^& ensure these are passed to PsExec, while > at the end is for local redirection
+      const remotePart = `cmd /c (${command}) ^> ${remoteTemp} 2^>^&1 ^& type ${remoteTemp} ^& timeout /t 20 /nobreak ^>nul ^& del /f /q ${remoteTemp}`;
+      
+      fullCommand = `"${psexecPath}" \\\\${host} -u "${username}" -p "${password}" -accepteula -nobanner -h ${remotePart} > "${localOutFile}" 2>&1`;
     }
 
-    // Local redirection approach on the server (API side)
-    const localId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-    const localOutFile = path.join(STORAGE_DIR, `local_out_${localId}.txt`);
-    
-    // Re-construct the full local command string for a clean shell execution
-    const psexecCommand = `"${executable}" ` + args.map(a => (a.includes(' ') || a.includes('&') || a.includes('>') || a.includes('(')) ? `"${a}"` : a).join(' ');
-    const fullLocalCommand = `${psexecCommand} > "${localOutFile}" 2>&1`;
+    console.log(`[EXEC] ${host} | Command: ${fullCommand}`);
 
-    console.log(`[EXEC] ${host} | RemoteRedir: ${remoteOutFile} | LocalRedir: out_${localId}.txt`);
-
-    const child = spawn('cmd.exe', ['/c', fullLocalCommand], {
+    const child = spawn('cmd.exe', ['/c', fullCommand], {
       shell: false,
       windowsHide: true,
     });
 
-    const timeoutDuration = isScript ? 180000 : 110000; // Increased to accommodate remote wait
+    const timeoutDuration = isScript ? 180000 : 120000;
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       if (fs.existsSync(localOutFile)) try { fs.unlinkSync(localOutFile); } catch(e) {}
@@ -132,7 +92,8 @@ async function winExecute(options: {
     child.on('close', (code) => {
       clearTimeout(timer);
       
-      setTimeout(() => { // Small delay to ensure file write is flushed
+      // Wait a bit for the file to be fully written
+      setTimeout(() => {
         try {
           let output = '';
           if (fs.existsSync(localOutFile)) {
@@ -141,7 +102,7 @@ async function winExecute(options: {
             if (!output.trim()) output = iconv.decode(raw, 'utf-8');
             try { fs.unlinkSync(localOutFile); } catch(e) {}
           }
-          console.log(`[EXEC] ${host} Finalizado | Code: ${code} | Saída: ${output.length} bytes`);
+          console.log(`[EXEC] ${host} Finalizado | Code: ${code} | Out: ${output.length} bytes`);
           resolve({ stdout: output, stderr: '', exitCode: code });
         } catch (err) {
           reject(err);
