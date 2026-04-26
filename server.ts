@@ -61,7 +61,7 @@ async function winExecute(options: {
   const { host, command, username, password, isScript } = options;
   const isLocal = host === 'localhost' || host === '127.0.0.1';
 
-  const runSingle = (cmdStr: string, capture: boolean): Promise<{ out: string; code: number | null }> => {
+  const runSingle = (cmdStr: string, capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
     return new Promise((resolve, reject) => {
       const child = spawn(cmdStr, [], { 
         shell: true, 
@@ -69,29 +69,31 @@ async function winExecute(options: {
         stdio: ['ignore', 'pipe', 'pipe']
       });
       
-      const chunks: Buffer[] = [];
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
       const timeout = setTimeout(() => {
         child.kill('SIGKILL');
         reject(new Error('Processo demorou muito para responder'));
-      }, 60000); // 60s timeout for each step
+      }, 90000);
 
-      child.stdout.on('data', (d) => { if (capture) chunks.push(d); });
-      child.stderr.on('data', (d) => { if (capture) chunks.push(d); });
+      child.stdout.on('data', (d) => { if (capture) stdoutChunks.push(d); });
+      child.stderr.on('data', (d) => { if (capture) stderrChunks.push(d); });
 
       child.on('close', (code) => {
         clearTimeout(timeout);
         let out = '';
+        let err = '';
         if (capture) {
-          const combined = Buffer.concat(chunks);
-          // Try CP850 (cmd legacy), then UTF-8
-          out = iconv.decode(combined, 'cp850');
-          if (!out.trim() && combined.length > 0) {
-            out = iconv.decode(combined, 'utf-8');
-          }
-          // Remove null bytes that might interrupt text rendering
-          out = out.replace(/\0/g, '');
+          const outBuf = Buffer.concat(stdoutChunks);
+          const errBuf = Buffer.concat(stderrChunks);
+          
+          out = iconv.decode(outBuf, 'cp850');
+          if (!out.trim() && outBuf.length > 0) out = iconv.decode(outBuf, 'utf-8');
+          
+          err = iconv.decode(errBuf, 'cp850');
+          if (!err.trim() && errBuf.length > 0) err = iconv.decode(errBuf, 'utf-8');
         }
-        resolve({ out, code });
+        resolve({ out, err, code });
       });
 
       child.on('error', (err) => {
@@ -104,7 +106,7 @@ async function winExecute(options: {
   if (isLocal) {
     console.log(`[EXEC] Local | Command: ${command}`);
     const res = await runSingle(`cmd /c "${command}"`, true);
-    return { stdout: res.out, stderr: '', exitCode: res.code };
+    return { stdout: res.out, stderr: res.err, exitCode: res.code };
   }
 
   const psexec = 'psexec.exe';
@@ -113,11 +115,10 @@ async function winExecute(options: {
 
   try {
     if (isScript) {
-      // For scripts, use -c to copy and execute
       console.log(`[EXEC] ${host} | Script: ${command}`);
       const scriptExec = `${baseAuth} -c "${command}"`;
       const res = await runSingle(scriptExec, true);
-      return { stdout: res.out, stderr: '', exitCode: res.code };
+      return { stdout: res.out, stderr: res.err, exitCode: res.code };
     } else {
       const uniqueId = Math.floor(Math.random() * 100000);
       const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
@@ -127,39 +128,42 @@ async function winExecute(options: {
       const createCmd = `${baseAuth} cmd /c "(${command}) > ${remoteOutFile} 2>&1"`;
       await runSingle(createCmd, false);
 
-      // Give Windows more time to flush the file to disk and release locks
       await sleep(5000);
 
-      // 2. READ FILE
-      console.log(`[EXEC] ${host} [STEP 2] Lendo via Base64: ${remoteOutFile}`);
-      // Use PowerShell to convert to Base64 to ensure NO truncation and NO encoding loss during transit
-      const readCmd = `${baseAuth} powershell -NoProfile -ExecutionPolicy Bypass -Command "[Convert]::ToBase64String([IO.File]::ReadAllBytes('${remoteOutFile}'))"`;
+      // 2. READ FILE (Com marcadores para isolar o Base64)
+      console.log(`[EXEC] ${host} [STEP 2] Lendo via Base64 Protegido: ${remoteOutFile}`);
+      const readCmd = `${baseAuth} powershell -NoProfile -ExecutionPolicy Bypass -Command "$b=[Convert]::ToBase64String([IO.File]::ReadAllBytes('${remoteOutFile}')); Write-Output '---B64_START---'; Write-Output $b; Write-Output '---B64_END---'"`;
       const readRes = await runSingle(readCmd, true);
       
       let finalOutput = '';
-      try {
-        // PsExec might still output some invisible chars or newlines, clean the string for Base64
-        const b64Data = readRes.out.trim().replace(/[\r\n\s]/g, '');
-        if (b64Data.length > 0) {
+      const b64Match = readRes.out.match(/---B64_START---([\s\S]*?)---B64_END---/);
+      
+      if (b64Match && b64Match[1]) {
+        try {
+          const b64Data = b64Match[1].trim().replace(/[\r\n\s]/g, '');
           const buffer = Buffer.from(b64Data, 'base64');
+          // Tentamos CP850 primeiro (padrão cmd), depois UTF-8
           finalOutput = iconv.decode(buffer, 'cp850');
           if (!finalOutput.trim()) finalOutput = iconv.decode(buffer, 'utf-8');
-        } else {
-          finalOutput = 'Arquivo vazio ou não lido.';
+          finalOutput = finalOutput.replace(/\0/g, '');
+        } catch (decErr) {
+          console.error(`[DECODE ERROR] ${host}:`, decErr);
+          finalOutput = "Erro ao decodificar dados do arquivo.";
         }
-      } catch (err) {
-        console.error(`[DECODE ERROR] ${host}:`, err);
-        finalOutput = readRes.out; // Fallback to raw output if decoding fails
+      } else {
+        console.warn(`[READ WARNING] Marcadores base64 não encontrados em ${host}. Raw output len: ${readRes.out.length}`);
+        // Fallback: se não achou marcadores, mostra o stdout bruto mas limpo (pode vir com banners do psexec)
+        finalOutput = readRes.out.replace(/---B64_START---|---B64_END---/g, '').trim();
       }
 
       console.log(`[READ INFO] ${host} caracteres finais: ${finalOutput.length}`);
 
-      // 3. DELETE FILE (Detached Cleanup)
+      // 3. DELETE FILE
       console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
       const cleanupCmd = `${baseAuth} cmd /c "ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}"`;
       spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
 
-      return { stdout: finalOutput, stderr: '', exitCode: readRes.code };
+      return { stdout: finalOutput, stderr: readRes.err, exitCode: readRes.code };
     }
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
