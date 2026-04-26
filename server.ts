@@ -39,7 +39,9 @@ async function readDb() {
 }
 
 async function writeDb(data: any) {
-  await fsp.writeFile(DB_FILE, JSON.stringify(data, null, 2));
+  const tempFile = DB_FILE + '.tmp';
+  await fsp.writeFile(tempFile, JSON.stringify(data, null, 2));
+  await fsp.rename(tempFile, DB_FILE);
 }
 
 /**
@@ -65,7 +67,8 @@ async function winExecute(options: {
       executable = 'cmd.exe';
       args = ['/c', command];
     } else {
-      executable = path.join(process.cwd(), 'psexec.exe');
+      // Use 'psexec.exe' directly so it can be found in the PATH if not in root
+      executable = 'psexec.exe'; 
       args.push(`\\\\${host}`);
       if (username) args.push('-u', username);
       if (password) args.push('-p', password);
@@ -74,11 +77,10 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command);
       } else {
-        // Construct the command exactly as user requested:
-        // cmd /c ipconfig ^> C:\Windows\Temp\out.txt ^& type C:\Windows\Temp\out.txt ^& timeout /t 20 ^>nul ^& del C:\Windows\Temp\out.txt
-        const remoteOutFile = "C:\\Windows\\Temp\\out.txt";
-        const remotePart = `${command} ^> ${remoteOutFile} ^& type ${remoteOutFile} ^& timeout /t 20 ^>nul ^& del ${remoteOutFile}`;
-        args.push('cmd', '/c', remotePart);
+        // As requested by the user: conventional use theory
+        // We use cmd /c and pass the command string.
+        // If capture issues persist, we can consider the redirection trick later.
+        args.push('cmd', '/c', command);
       }
     }
 
@@ -231,7 +233,8 @@ async function startServer() {
     const { name } = req.query;
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'Nome de arquivo inválido' });
     
-    const fileName = name.endsWith('.bat') ? name : `${name}.bat`;
+    const safeName = path.basename(name);
+    const fileName = safeName.endsWith('.bat') ? safeName : `${safeName}.bat`;
     try {
       await fsp.writeFile(path.join(SCRIPTS_DIR, fileName), req.body);
       res.json({ success: true });
@@ -242,7 +245,8 @@ async function startServer() {
 
   app.delete('/api/scripts/:name', async (req, res) => {
     try {
-      await fsp.unlink(path.join(SCRIPTS_DIR, req.params.name));
+      const safeName = path.basename(req.params.name);
+      await fsp.unlink(path.join(SCRIPTS_DIR, safeName));
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: 'Falha ao remover script' });
