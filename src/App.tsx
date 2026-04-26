@@ -384,8 +384,11 @@ const App = () => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
     setLog(prev => [...prev, `[SYSTEM] Solicitando desinstalação de "${appName}" em ${host}...`]);
-    setIsWaitModalOpen(true);
-
+    
+    // We close the app modal to "return to dashboard"
+    setIsAppModalOpen(false);
+    
+    // We don't use the blocking WaitModal here so the user can keep using the dash
     try {
       const res = await fetch('/api/apps/uninstall', {
         method: 'POST',
@@ -395,15 +398,12 @@ const App = () => {
       const data = await res.json();
       
       if (res.ok && data.success) {
-        setLog(prev => [...prev, `[SYSTEM] Comando de desinstalação enviado com sucesso para ${host}.`]);
-        setIsAppModalOpen(false);
+        setLog(prev => [...prev, `[SYSTEM] SUCESSO: Desinstalação de "${appName}" finalizada em ${host}.`]);
       } else {
-        setLog(prev => [...prev, `[ERROR] Falha ao desinstalar: ${data.error || 'Erro no PsExec'}`]);
+        setLog(prev => [...prev, `[ERROR] Falha ao desinstalar "${appName}" em ${host}: ${data.error || 'Erro no processo'}`]);
       }
     } catch (err) {
-      setLog(prev => [...prev, `[ERROR] Erro de rede ao desinstalar.`]);
-    } finally {
-      setIsWaitModalOpen(false);
+      setLog(prev => [...prev, `[ERROR] Erro de rede ao tentar desinstalar "${appName}".`]);
     }
   };
 

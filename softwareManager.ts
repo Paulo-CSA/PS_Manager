@@ -48,8 +48,8 @@ async function softwareExec(host: string, script: string, user?: string, pass?: 
 
     const timeout = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error('Timeout na consulta de software'));
-    }, 90000);
+      reject(new Error('Timeout na execução do comando (PsExec)'));
+    }, 300000);
 
     child.on('close', (code) => {
       clearTimeout(timeout);
