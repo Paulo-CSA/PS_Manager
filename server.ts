@@ -307,15 +307,20 @@ async function startServer() {
   // Helper para retornar o output o mais fiel possível ao CMD original
   function cleanOutput(raw: string): string {
     if (!raw) return '';
-    
-    // 1. Remove caracteres nulos (\0) e caracteres de controle indesejados
-    // 2. Normaliza quebras de linha Windows/Unix para exibição
-    return raw
-      .replace(/\0/g, '')
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      .trim();
+    // Preserve characters but normalize line endings. Remove null bytes.
+    return raw.replace(/\0/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   }
+
+  // Debug log endpoint
+  app.post('/api/save-debug', async (req, res) => {
+    try {
+      const { content } = req.body;
+      await fsp.writeFile('last_output_raw.txt', content);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: 'Erro ao salvar debug' });
+    }
+  });
 
   // Vite integration
   if (process.env.NODE_ENV !== 'production') {

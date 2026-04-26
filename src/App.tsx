@@ -331,6 +331,12 @@ const App = () => {
       
       results.forEach((r: any) => {
         setLog(prev => [...prev, `[${r.host}] ${r.status.toUpperCase()}: ${r.output}`]);
+        // Salva debug do último resultado no servidor
+        fetch('/api/save-debug', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: r.output })
+        }).catch(() => {});
       });
       return results;
     } catch (err) {
@@ -393,6 +399,12 @@ const App = () => {
       
       if (res.ok) {
         setTerminalLog(prev => [...prev, { type: 'out', text: data.output }]);
+        // Debug save
+        fetch('/api/save-debug', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: data.output })
+        }).catch(() => {});
       } else {
         setTerminalLog(prev => [...prev, { type: 'out', text: `ERRO: ${data.error}` }]);
       }
@@ -747,7 +759,7 @@ const App = () => {
                   {log.map((line, i) => (
                     <div key={i} className="flex gap-2">
                       <span className="opacity-30 select-none">{i + 1}</span>
-                      <span>{line}</span>
+                      <span className="whitespace-pre-wrap block flex-1">{line}</span>
                     </div>
                   ))}
                   {log.length === 0 && <span className="text-gray-700 italic">Pronto para execução...</span>}
