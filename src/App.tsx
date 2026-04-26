@@ -371,8 +371,11 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    // Comando via PowerShell otimizado
-    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace '/I', '/X'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
+    
+    // Comando via PowerShell conforme solicitado pelo usuário para desinstalação silenciosa
+    // Substituímos 'WinRAR' pelo nome do app selecionado
+    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName -like '${appName.trim()}*' } | Select-Object -First 1; if ($app) { $uninstall = $app.UninstallString; if ($uninstall -match 'msiexec') { if ($uninstall -match '{.*}') { $guid = $matches[0]; Start-Process msiexec.exe -ArgumentList '/x', $guid, '/quiet', '/norestart' -Wait } } else { Start-Process cmd.exe -ArgumentList '/c', $uninstall, '/S' -Wait } }"`;
+    
     await executeRemote(uninstallCmd, [host]);
     setIsAppModalOpen(false);
   };
