@@ -472,7 +472,7 @@ async function startServer() {
     });
   }
 
-  app.listen(port, '0.0.0.0', () => {
+  app.listen(port, '0.0.0.0', (3000) => {
     console.log(`[READY] Servidor PC_MANAGER rodando em http://0.0.0.0:${port}`);
   });
 }
