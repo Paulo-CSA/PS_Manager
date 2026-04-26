@@ -76,11 +76,10 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command); 
       } else {
-        // Redirection trick: capture output to a temporary file on the REMOTE machine, 
-        // type it to stdout, then delete it. This bypasses psexec's piping limitations.
+        // Use a more direct approach to avoid redundant 'cmd /c' wrappers and quoting issues
         const tempFile = 'C:\\psexec_out_' + Math.floor(Math.random() * 99999) + '.txt';
-        const wrappedCommand = `cmd /c "${command} > ${tempFile} 2>&1 & type ${tempFile} & del ${tempFile}"`;
-        args.push('cmd', '/c', wrappedCommand);
+        // We pass the shell components as individual arguments to psexec to let it handle them
+        args.push('cmd', '/c', `${command} > ${tempFile} 2>&1 & type ${tempFile} & del ${tempFile}`);
       }
     }
 
