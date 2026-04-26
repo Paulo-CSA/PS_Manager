@@ -7,20 +7,25 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $paths = @(
     'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
 
+# HKU (todos usuários)
+$hkuPaths = Get-ChildItem Registry::HKEY_USERS | ForEach-Object {
+    "$($_.Name)\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"
+}
+
+$paths += $hkuPaths
+
 foreach ($path in $paths) {
-    Get-ItemProperty $path | ForEach-Object {
+    Get-ItemProperty $path -ErrorAction SilentlyContinue | ForEach-Object {
         if ($_.DisplayName) {
             $name = $_.DisplayName
             $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
             $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
-            
-            # Filtros básicos para remover ruído
+
             if ($name -notmatch 'Update|Hotfix|Security|Microsoft Visual C\\+\\+') {
-                Write-Output "$name###$ver###$pub"
+                "$name###$ver###$pub"
             }
         }
     }
