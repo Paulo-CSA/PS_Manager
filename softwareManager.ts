@@ -4,19 +4,37 @@ import { Buffer } from 'buffer';
 
 const SOFTWARE_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
-$paths = @(
+
+# Fonte 1: Registro
+$regPaths = @(
     'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
-foreach ($path in $paths) {
-    $items = Get-ItemProperty $path
-    foreach ($item in $items) {
-        if ($item.DisplayName) {
-            $name = $item.DisplayName
-            $ver = if ($item.DisplayVersion) { $item.DisplayVersion } else { "---" }
-            $pub = if ($item.Publisher) { $item.Publisher } else { "---" }
-            Write-Host "$name###$ver###$pub"
+
+foreach ($path in $regPaths) {
+    Get-ItemProperty $path | ForEach-Object {
+        if ($_.DisplayName) {
+            $name = $_.DisplayName
+            $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
+            $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
+            Write-Output "$name###$ver###$pub"
+        }
+    }
+}
+
+# Fonte 2: WMI
+Get-WmiObject Win32_Product | ForEach-Object {
+    if ($_.Name) {
+        Write-Output "$($_.Name)###$($_.Version)###$($_.Vendor)"
+    }
+}
+
+# Fonte 3: Get-Package
+if (Get-Command Get-Package -ErrorAction SilentlyContinue) {
+    Get-Package | ForEach-Object {
+        if ($_.Name) {
+             Write-Output "$($_.Name)###$($_.Version)###$($_.Publisher)"
         }
     }
 }
