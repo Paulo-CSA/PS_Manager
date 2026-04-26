@@ -44,6 +44,8 @@ async function writeDb(data: any) {
   await fsp.rename(tempFile, DB_FILE);
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 /**
  * Robust execution engine for Windows.
  * Handles PsExec and direct CMD execution for localhost.
@@ -66,11 +68,28 @@ async function winExecute(options: {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
       });
-      let out = '';
-      if (capture) {
-        child.stdout.on('data', (d) => out += iconv.decode(d, 'cp850'));
-      }
-      child.on('close', (code) => resolve({ out, code }));
+      
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+
+      child.stdout.on('data', (d) => {
+        if (capture) stdoutChunks.push(d);
+      });
+      child.stderr.on('data', (d) => {
+        if (capture) stderrChunks.push(d);
+      });
+
+      child.on('close', (code) => {
+        let out = '';
+        if (capture) {
+          const combined = Buffer.concat([...stdoutChunks, ...stderrChunks]);
+          out = iconv.decode(combined, 'cp850');
+          if (!out.trim() && combined.length > 0) {
+            out = iconv.decode(combined, 'utf-8');
+          }
+        }
+        resolve({ out, code });
+      });
       child.on('error', reject);
     });
   };
@@ -100,6 +119,9 @@ async function winExecute(options: {
       console.log(`[EXEC] ${host} [STEP 1] Criando: ${remoteOutFile}`);
       const createCmd = `${baseAuth} cmd /c "(${command}) > ${remoteOutFile} 2>&1"`;
       await runSingle(createCmd, false);
+
+      // Give Windows a moment to flush the file to disk and release locks
+      await sleep(1500);
 
       // 2. READ FILE
       console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
