@@ -77,10 +77,14 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command);
       } else {
-        // As requested by the user: conventional use theory
-        // We use cmd /c and pass the command string.
-        // If capture issues persist, we can consider the redirection trick later.
-        args.push('cmd', '/c', command);
+        // Unique remote capture file for each execution
+        const uniqueId = Math.floor(Math.random() * 100000);
+        const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
+        
+        // Append the redirection and cleanup logic requested by the user
+        const decoratedCommand = `${command} ^> ${remoteOutFile} ^& type ${remoteOutFile} ^& timeout /t 20 ^>nul ^& del ${remoteOutFile}`;
+        
+        args.push('cmd', '/c', decoratedCommand);
       }
     }
 
