@@ -358,7 +358,7 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    const results = await executeRemote(`powershell -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName | Sort-Object -Unique"`, [host]);
+    const results = await executeRemote(`powershell -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -ne $null } | Select-Object -ExpandProperty DisplayName"`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
@@ -379,8 +379,8 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    // Comando via PowerShell simplificado
-    const uninstallCmd = `powershell -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1 | ForEach-Object { if ($_.UninstallString) { if ($_.UninstallString -match 'msiexec') { $guid = ($_.UninstallString -replace '.*({.*})', '$1'); Start-Process msiexec.exe -ArgumentList '/x', $guid, '/quiet', '/norestart' -Wait } else { cmd.exe /c \\"$($_.UninstallString) /quiet /norestart\\" } } }"`;
+    // Comando via PowerShell para desinstalação via DisplayName (UninstallString)
+    const uninstallCmd = `powershell -Command "$app = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { Start-Process cmd.exe -ArgumentList '/c', $app.UninstallString, '/quiet', '/norestart' -Wait }"`;
     await executeRemote(uninstallCmd, [host]);
     setIsAppModalOpen(false);
   };

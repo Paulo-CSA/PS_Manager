@@ -136,52 +136,46 @@ async function winExecute(options: {
   const baseArgs = [`\\\\${host}`, ...authArgs, '-accepteula', '-nobanner', '-h'];
 
   try {
-    if (isScript || command.length > 100 || command.includes('$') || command.includes('(')) {
-      // Robust Mode: Create a temporary batch file on the server and use PsExec -c
+    if (isScript) {
+      const res = await runArgs(psexec, [...baseArgs, '-c', command], true);
+      return { stdout: res.out, stderr: res.err, exitCode: res.code };
+    } else {
       const uniqueId = Math.floor(Math.random() * 100000);
-      const tempBatchPath = path.join(TEMP_BATCH_DIR, `run_${uniqueId}.bat`);
-      const remoteOutputFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
-      const smbOutputPath = `\\\\${host}\\C$\\Windows\\Temp\\out_${uniqueId}.txt`;
+      const remoteFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
+      const smbPath = `\\\\${host}\\C$\\Windows\\Temp\\out_${uniqueId}.txt`;
 
-      // Build the batch content. We use redirection inside the batch to be safe.
-      const batchContent = `@echo off\r\n(${command}) > "${remoteOutputFile}" 2>&1\r\n`;
-      await fsp.writeFile(tempBatchPath, batchContent);
+      // 1. EXECUTE AND REDIRECT ON REMOTE
+      console.log(`[EXEC] ${host} [STAGE 1] Redirecting to ${remoteFile}`);
+      await runArgs(psexec, [...baseArgs, 'cmd', '/c', `(${command}) > ${remoteFile} 2>&1`], false);
 
-      console.log(`[ROBUST_EXEC] ${host} | Using batch: ${tempBatchPath}`);
-      
-      // Execute using -c (Copy and Run)
-      // PsExec -c copies the file, runs it, and then deletes it.
-      await runArgs(psexec, [...baseArgs, '-c', tempBatchPath], false);
+      await sleep(3000); // Wait for flush
 
-      await sleep(3000); // Flush wait
-
+      // 2. READ OUTPUT
       let finalOutput = '';
+      
       try {
-        if (fs.existsSync(smbOutputPath)) {
-          const buf = fs.readFileSync(smbOutputPath);
+        // Method A: Direct SMB Core access (Most robust for large data)
+        if (fs.existsSync(smbPath)) {
+          const buf = fs.readFileSync(smbPath);
           finalOutput = iconv.decode(buf, 'cp850');
           if (!finalOutput.trim() && buf.length > 0) finalOutput = iconv.decode(buf, 'utf-8');
         } else {
-          // Fallback read
-          const readRes = await runArgs(psexec, [...baseArgs, 'cmd', '/c', `type ${remoteOutputFile}`], true);
+          // Method B: PowerShell direct read fallback
+          const readRes = await runArgs(psexec, [...baseArgs, 'powershell', '-NoProfile', '-Command', `[IO.File]::ReadAllText('${remoteFile}')`], true);
           finalOutput = readRes.out;
         }
-      } catch (e) {
-        console.error("Read failed", e);
+      } catch (readErr) {
+        // Method C: Last resort CMD type
+        const readRes = await runArgs(psexec, [...baseArgs, 'cmd', '/c', `type ${remoteFile}`], true);
+        finalOutput = readRes.out;
       }
 
-      // Cleanup
-      try {
-        await fsp.unlink(tempBatchPath);
-        spawn(psexec, [...baseArgs, 'cmd', '/c', `del /f /q "${remoteOutputFile}"`], { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
-      } catch (e) {}
+      console.log(`[EXEC] ${host} Completed. Length: ${finalOutput.length}`);
+
+      // 3. CLEANUP (Async)
+      spawn(psexec, [...baseArgs, 'cmd', '/c', `del /f /q ${remoteFile}`], { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
 
       return { stdout: finalOutput.replace(/\0/g, ''), stderr: '', exitCode: 0 };
-
-    } else {
-      // Simple Mode: Direct execution (for very simple commands)
-      const res = await runArgs(psexec, [...baseArgs, 'cmd', '/c', command], true);
-      return { stdout: res.out, stderr: res.err, exitCode: res.code };
     }
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
