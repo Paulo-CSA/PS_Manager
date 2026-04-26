@@ -231,26 +231,36 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // Use -h for elevated session (best for ipconfig, qwinsta, etc)
+      // Use -nobanner to reduce noise, -h for elevation
       const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
+      const fullCmd = `psexec -nobanner -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
       
       console.log(`[SHELL_REMOTO] ${fullCmd}`);
 
       const { stdout, stderr } = await execWin(fullCmd, 60000);
       
-      // Decodificamos usando CP850 mas sem remover nulls ou outras filtragens pesadas no estágio inicial
       const outStr = iconv.decode(stdout, 'cp850');
       const errStr = iconv.decode(stderr, 'cp850');
       
-      const combined = outStr + errStr;
-      res.json({ output: cleanOutput(combined) || 'Comando finalizado.' });
+      // Separate actual output from PsExec messages
+      let displayResult = '';
+      if (outStr.trim()) {
+        displayResult = outStr;
+        // If we have real output and also some connection log, append log at bottom
+        if (errStr.trim()) {
+          displayResult += '\n\n--- [LOGS DE CONEXÃO/DEBUG] ---\n' + errStr;
+        }
+      } else {
+        // If no stdout, show whatever we have in stderr
+        displayResult = errStr;
+      }
+
+      res.json({ output: cleanOutput(displayResult) || 'Executado (Sem retorno de texto).' });
     } catch (err: any) {
       const outErr = err.stdoutRaw ? iconv.decode(err.stdoutRaw, 'cp850') : '';
       const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
       const msgErr = err.message || '';
-      const combined = outErr + errErr + msgErr;
-      res.status(500).json({ error: cleanOutput(combined) });
+      res.status(500).json({ error: cleanOutput(outErr + errErr + msgErr) });
     }
   });
 
@@ -269,7 +279,7 @@ async function startServer() {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
             const escapedCommand = command.replace(/"/g, '""');
-            const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
+            const fullCmd = `psexec -nobanner -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
             
             console.log(`[BULK_EXEC] ${fullCmd}`);
 
@@ -277,16 +287,14 @@ async function startServer() {
             
             const outStr = iconv.decode(stdout, 'cp850');
             const errStr = iconv.decode(stderr, 'cp850');
-            const combined = outStr + errStr;
-            const cleaned = cleanOutput(combined);
+            
+            let displayResult = outStr.trim() ? outStr : errStr;
+            const cleaned = cleanOutput(displayResult);
             
             return { host, status: 'success', output: cleaned || 'Executado.' };
           } else {
-            // Local fallback
             const { stdout, stderr } = await execWin(command);
-            const outStr = iconv.decode(stdout, 'cp850');
-            const errStr = iconv.decode(stderr, 'cp850');
-            const combined = outStr + errStr;
+            const combined = iconv.decode(stdout, 'cp850') + iconv.decode(stderr, 'cp850');
             return { host, status: 'success', output: cleanOutput(combined) };
           }
         } catch (err: any) {
@@ -294,11 +302,7 @@ async function startServer() {
           const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
           const combined = outErr + errErr + (err.message || '');
           const cleaned = cleanOutput(combined);
-          return { 
-            host, 
-            status: 'failed', 
-            output: cleaned || 'Erro na execucao'
-          };
+          return { host, status: 'failed', output: cleaned || 'Erro na execucao' };
         }
       }));
       res.json({ results });
