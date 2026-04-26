@@ -194,15 +194,14 @@ function formatOutput(stdout: string, stderr: string): string {
 
 // --- Software Management (Isolated) ---
 const SOFTWARE_REGISTRY_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
-$paths = @(
-    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
-)
-$apps = Get-ItemProperty $paths -ErrorAction SilentlyContinue | 
-    Where-Object { $_.DisplayName -ne $null } | 
-    Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}} |
-    Sort-Object Name
+$apps = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue |
+Where-Object {
+    ($_.Publisher -notmatch 'Microsoft') -and
+    ($_.DisplayName -notmatch 'Microsoft') -and
+    ($_.DisplayName -ne $null)
+} |
+Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}} |
+Sort-Object Name
 $apps | ConvertTo-Json -Compress
 "`;
 
