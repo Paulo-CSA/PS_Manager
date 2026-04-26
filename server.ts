@@ -3,9 +3,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import http from 'http';
-import { Server } from 'socket.io';
-import { exec, spawn } from 'child_process';
+import { exec } from 'child_process';
 import iconv from 'iconv-lite';
 
 import bodyParser from 'body-parser';
@@ -58,68 +56,10 @@ async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, 
 
 async function startServer() {
   const app = express();
-  const server = http.createServer(app);
-  const io = new Server(server, {
-    cors: {
-      origin: "*",
-      methods: ["GET", "POST"]
-    }
-  });
-
   const port = Number(process.env.PORT) || 3000;
 
   app.use(cors());
   app.use(bodyParser.json());
-
-  // --- WebSocket Terminal Logic ---
-  io.on('connection', (socket) => {
-    let psProcess: any = null;
-
-    socket.on('terminal-start', async ({ host, username, password }) => {
-      if (psProcess) {
-        psProcess.kill();
-      }
-
-      // Iniciamos o PsExec em modo interativo
-      // CMD /K nos dá uma sessão persistente
-      const args = [`\\\\${host}`, '-u', username, '-p', password, '-accepteula', 'cmd'];
-      
-      try {
-        psProcess = spawn('psexec', args, {
-          windowsHide: true,
-          shell: false // Importante para não envolver em outro shell local
-        });
-
-        psProcess.stdout.on('data', (data: Buffer) => {
-          socket.emit('terminal-output', iconv.decode(data, 'cp850'));
-        });
-
-        psProcess.stderr.on('data', (data: Buffer) => {
-          socket.emit('terminal-output', iconv.decode(data, 'cp850'));
-        });
-
-        psProcess.on('close', (code: number) => {
-          socket.emit('terminal-output', `\n[CONEXÃO ENCERRADA - CÓDIGO ${code}]\n`);
-          psProcess = null;
-        });
-
-        socket.on('terminal-input', (data) => {
-          if (psProcess && psProcess.stdin.writable) {
-            // Convertemos de volta para CP850 antes de enviar para o CMD remoto
-             psProcess.stdin.write(iconv.encode(data, 'cp850'));
-          }
-        });
-      } catch (err: any) {
-        socket.emit('terminal-output', `\nErro ao iniciar PsExec: ${err.message}\n`);
-      }
-    });
-
-    socket.on('disconnect', () => {
-      if (psProcess) {
-        psProcess.kill();
-      }
-    });
-  });
 
   // --- Persistent Storage API ---
   app.get('/api/data', async (req, res) => {
@@ -368,9 +308,13 @@ async function startServer() {
   function cleanOutput(raw: string): string {
     if (!raw) return '';
     
-    // Remove apenas caracteres nulos (\0) e normaliza quebras de linha
-    // Não tentamos separar ou filtrar palavras para não corromper o retorno do comando
-    return raw.replace(/\0/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+    // 1. Remove caracteres nulos (\0) e caracteres de controle indesejados
+    // 2. Normaliza quebras de linha Windows/Unix para exibição
+    return raw
+      .replace(/\0/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .trim();
   }
 
   // Vite integration
@@ -389,7 +333,7 @@ async function startServer() {
     });
   }
 
-  server.listen(port, '0.0.0.0', () => {
+  app.listen(port, '0.0.0.0', () => {
     console.log(`>>> Servidor PC_MANAGER rodando em http://0.0.0.0:${port}`);
   });
 }

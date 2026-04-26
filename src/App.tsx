@@ -5,10 +5,6 @@ import {
   LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { io, Socket } from 'socket.io-client';
-import { Terminal as XTerminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import 'xterm/css/xterm.css';
 
 // --- Types ---
 interface Machine {
@@ -55,68 +51,19 @@ const App = () => {
   const [scripts, setScripts] = useState<string[]>([]);
   const [scriptToRun, setScriptToRun] = useState<string | null>(null);
   const [scriptTargetHosts, setScriptTargetHosts] = useState<string[]>([]);
-
+  
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [terminalHost, setTerminalHost] = useState<string | null>(null);
-  const socketRef = useRef<Socket | null>(null);
-  const xtermRef = useRef<XTerminal | null>(null);
-  const terminalElementRef = useRef<HTMLDivElement>(null);
+  const [terminalLog, setTerminalLog] = useState<{ type: 'in' | 'out', text: string }[]>([]);
+  const [terminalLoading, setTerminalLoading] = useState(false);
+  
+  const terminalEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (isTerminalOpen && terminalHost && creds.username && creds.password) {
-      // Connect to socket
-      const socket = io();
-      socketRef.current = socket;
-
-      // Initialize XTerm
-      const term = new XTerminal({
-        cursorBlink: true,
-        theme: {
-          background: '#0a0a0b',
-          foreground: '#e4e3e0',
-          cursor: '#ffffff',
-          selectionBackground: '#334155'
-        },
-        fontFamily: 'JetBrains Mono, Menlo, monospace',
-        fontSize: 14,
-        letterSpacing: 0
-      });
-      const fitAddon = new FitAddon();
-      term.loadAddon(fitAddon);
-      xtermRef.current = term;
-
-      if (terminalElementRef.current) {
-        term.open(terminalElementRef.current);
-        fitAddon.fit();
-      }
-
-      // Start remote terminal
-      socket.emit('terminal-start', {
-        host: terminalHost,
-        username: creds.username,
-        password: creds.password
-      });
-
-      // Handle output
-      socket.on('terminal-output', (data: string) => {
-        term.write(data);
-      });
-
-      // Handle input
-      term.onData(data => {
-        socket.emit('terminal-input', data);
-      });
-
-      const handleResize = () => fitAddon.fit();
-      window.addEventListener('resize', handleResize);
-
-      return () => {
-        socket.disconnect();
-        term.dispose();
-        window.removeEventListener('resize', handleResize);
-      };
+    if (isTerminalOpen) {
+      terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [isTerminalOpen, terminalHost, creds]);
+  }, [terminalLog, isTerminalOpen]);
 
   // Forms
   const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
@@ -425,12 +372,35 @@ const App = () => {
   };
 
   const openTerminal = (host: string) => {
-    if (!creds.username || !creds.password) {
-      alert('Configure as credenciais primeiro.');
-      return;
-    }
     setTerminalHost(host);
+    setTerminalLog([{ type: 'out', text: `Conectando ao terminal de ${host}...` }]);
     setIsTerminalOpen(true);
+  };
+
+  const sendTerminalCommand = async (command: string) => {
+    if (!command.trim() || !terminalHost) return;
+    
+    setTerminalLog(prev => [...prev, { type: 'in', text: command }]);
+    setTerminalLoading(true);
+    
+    try {
+      const res = await fetch('/api/shell', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: terminalHost, command })
+      });
+      const data = await res.json();
+      
+      if (res.ok) {
+        setTerminalLog(prev => [...prev, { type: 'out', text: data.output }]);
+      } else {
+        setTerminalLog(prev => [...prev, { type: 'out', text: `ERRO: ${data.error}` }]);
+      }
+    } catch (err) {
+      setTerminalLog(prev => [...prev, { type: 'out', text: `ERRO DE CONEXÃO.` }]);
+    } finally {
+      setTerminalLoading(false);
+    }
   };
 
   // Table Filtering and Pagination
@@ -1313,60 +1283,91 @@ const App = () => {
         )}
       </AnimatePresence>
 
-      {/* Terminal PsExec XTerm Modal */}
+      {/* Terminal Modal */}
       <AnimatePresence>
         {isTerminalOpen && (
-          <div className="fixed inset-0 z-[150] flex items-center justify-center p-0 md:p-4 bg-black/90 backdrop-blur-md">
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
             <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#0a0a0b] border border-white/10 rounded-none md:rounded-2xl w-full max-w-5xl h-full md:h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="bg-[#111] border border-white/10 rounded-2xl w-full max-w-4xl h-[80vh] flex flex-col shadow-2xl overflow-hidden"
             >
               {/* Header */}
               <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between bg-[#151619]">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-blue-500/10 rounded-lg">
-                    <Terminal className="text-blue-500" size={20} />
+                  <div className="p-2 bg-amber-500/10 rounded-lg">
+                    <Cpu className="text-amber-500" size={20} />
                   </div>
                   <div>
-                    <h3 className="font-bold text-sm">Terminal Remoto Interativo (PsExec)</h3>
-                    <p className="text-[10px] text-gray-500 font-mono tracking-tighter uppercase">Host Conectado: {terminalHost}</p>
+                    <h3 className="font-bold text-sm">Shell Remoto (PsExec)</h3>
+                    <p className="text-[10px] text-gray-500 font-mono tracking-tighter uppercase">Conectado em: {terminalHost}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                   <div className="text-[10px] text-emerald-500 font-mono flex items-center gap-2 mr-4 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
-                    <Activity size={10} className="animate-pulse" />
-                    STATUS: LIVE_SESSION
-                  </div>
+                <div className="flex items-center gap-2">
                   <button 
-                    onClick={() => {
-                        xtermRef.current?.clear();
-                        xtermRef.current?.focus();
-                    }}
+                    onClick={() => setTerminalLog([])}
                     className="p-2 hover:bg-white/5 rounded-lg transition-all text-gray-500 hover:text-white"
                     title="Limpar Terminal"
                   >
-                    <Trash2 size={16} />
+                    <Trash size={18} />
                   </button>
                   <button 
                     onClick={() => setIsTerminalOpen(false)}
-                    className="p-2 hover:bg-white/5 rounded-full transition-all"
+                    className="p-2 hover:bg-white/5 rounded-lg transition-all"
                   >
-                    <XCircle size={22} className="text-gray-500 hover:text-red-500" />
+                    <Plus className="rotate-45" size={20} />
                   </button>
                 </div>
               </div>
 
-              {/* XTerm Container */}
-              <div 
-                ref={terminalElementRef}
-                className="flex-1 bg-[#0a0a0b] overflow-hidden p-2"
-              />
+              {/* Terminal Area */}
+              <div className="flex-1 bg-black p-6 font-mono text-sm overflow-y-auto custom-scrollbar flex flex-col gap-2">
+                {terminalLog.map((entry, i) => (
+                  <div key={i} className={`flex gap-3 ${entry.type === 'in' ? 'text-blue-400' : 'text-gray-300'}`}>
+                    <span className="shrink-0 opacity-40 select-none">
+                      {entry.type === 'in' ? '>' : '#'}
+                    </span>
+                    <pre className="whitespace-pre-wrap break-all leading-relaxed">
+                      {entry.text}
+                    </pre>
+                  </div>
+                ))}
+                {terminalLoading && (
+                  <div className="flex gap-2 items-center text-blue-500/50 animate-pulse mt-2">
+                    <span className="animate-spin text-xs">/</span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest">Processando...</span>
+                  </div>
+                )}
+                <div ref={terminalEndRef} />
+              </div>
 
-              <div className="px-6 py-2 bg-[#151619] border-t border-white/5 flex items-center justify-between">
-                <span className="text-[9px] text-gray-600 font-mono uppercase tracking-[0.2em]">PsManager Shell Integration v2.0</span>
-                <span className="text-[9px] text-blue-500/50 font-mono">CP850 ENCODING ACTIVE</span>
+              {/* Input Area */}
+              <div className="p-4 bg-[#151619] border-t border-white/5">
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const input = e.currentTarget.cmd.value;
+                    if (input) {
+                      sendTerminalCommand(input);
+                      e.currentTarget.cmd.value = '';
+                    }
+                  }}
+                  className="flex gap-3 bg-black border border-white/5 rounded-xl px-4 py-3 focus-within:border-blue-500/50 transition-all"
+                >
+                  <span className="text-emerald-500 font-bold tracking-tighter">CMD_</span>
+                  <input 
+                    name="cmd"
+                    autoFocus
+                    autoComplete="off"
+                    disabled={terminalLoading}
+                    placeholder="Digite o comando remoto..."
+                    className="flex-1 bg-transparent border-none outline-none text-white text-sm"
+                  />
+                  <div className="text-[10px] text-gray-600 font-mono flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 border border-white/10 rounded">ENTER</span>
+                  </div>
+                </form>
               </div>
             </motion.div>
           </div>
