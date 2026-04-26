@@ -9,20 +9,18 @@ $paths = @(
     'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
+$results = New-Object System.Collections.Generic.List[string]
 foreach ($path in $paths) {
-    $items = Get-ItemProperty $path
-    foreach ($item in $items) {
-        if ($item.DisplayName) {
-            $name = $item.DisplayName
-            $ver = if ($item.DisplayVersion) { $item.DisplayVersion } else { "---" }
-            $pub = if ($item.Publisher) { $item.Publisher } else { "---" }
-            # Filter Microsoft-labeled apps to reduce clutter as requested before
-            if ($pub -notmatch "Microsoft" -and $name -notmatch "^Windows") {
-                Write-Output "$name###$ver###$pub"
-            }
+    Get-ItemProperty $path | ForEach-Object {
+        if ($_.DisplayName) {
+            $name = $_.DisplayName
+            $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
+            $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
+            $results.Add("$name###$ver###$pub")
         }
     }
 }
+$results | Sort-Object | Get-Unique | ForEach-Object { Write-Host $_ }
 `;
 
 /**
@@ -54,8 +52,28 @@ async function softwareExec(host: string, script: string, user?: string, pass?: 
     child.on('close', (code) => {
       clearTimeout(timeout);
       const buf = Buffer.concat(stdoutChunks);
-      let out = iconv.decode(buf, 'cp850');
-      if (!out.trim() && buf.length > 0) out = iconv.decode(buf, 'utf-8');
+      
+      // PowerShell EncodedCommand output is often UTF-16LE, but via PsExec it might be CP850
+      // Let's try to detect UTF-16LE (BOM or just presence of nulls in a way that suggests it)
+      let out = '';
+      if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+        out = iconv.decode(buf, 'utf16-le');
+      } else {
+        // Try UTF-16LE if it looks like it (lots of high-byte zeroes)
+        let nulls = 0;
+        for (let i = 1; i < Math.min(buf.length, 100); i += 2) {
+          if (buf[i] === 0) nulls++;
+        }
+        if (nulls > 10) {
+          out = iconv.decode(buf, 'utf16-le');
+        } else {
+          out = iconv.decode(buf, 'cp850');
+        }
+      }
+
+      if (!out.trim() && buf.length > 0) {
+        out = iconv.decode(buf, 'utf-8');
+      }
       
       const errBuf = Buffer.concat(stderrChunks);
       const errOut = iconv.decode(errBuf, 'cp850');
@@ -105,6 +123,9 @@ export async function getRemoteSoftware(host: string, user?: string, pass?: stri
     const rawOutput = await softwareExec(host, SOFTWARE_SCRIPT, user, pass);
     const apps = parseSoftwareOutput(rawOutput);
     console.log(`[SOFT_ISOLATED] Success. ${apps.length} apps found for ${host}`);
+    if (apps.length === 0 && rawOutput.trim()) {
+      console.log(`[SOFT_ISOLATED_DEBUG] Raw output from ${host}:`, rawOutput);
+    }
     return apps;
   } catch (err) {
     console.error(`[SOFT_ISOLATED_ERROR] ${host}:`, err);
