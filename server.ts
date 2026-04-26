@@ -80,7 +80,7 @@ async function winExecute(options: {
         fullExecutionCommand = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h cmd /c ${captureLogic}`;
 
         thisCleanup = () => {
-          const cleanupCmd = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h cmd /c timeout /t 10 /nobreak ^>nul ^& del /f /q ${remoteOutFile}`;
+          const cleanupCmd = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h cmd /c ping 127.0.0.1 -n 10 ^>nul ^& del /f /q ${remoteOutFile}`;
           console.log(`[CLEANUP] Iniciando limpeza em ${host}: ${remoteOutFile}`);
           spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
         };
