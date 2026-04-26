@@ -88,7 +88,8 @@ $appName = "${appName}"
 
 $paths = @(
  'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
- 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+ 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+ 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
 
 $app = Get-ItemProperty $paths -ErrorAction SilentlyContinue |
@@ -125,22 +126,31 @@ if ($cmd -match "msiexec") {
 }
 else {
     # --- EXE ROBUSTO ---
+    $cmd = $cmd.Trim()
     $exe = ""
     $args = ""
 
-    if ($cmd.StartsWith('"')) {
-        $exe = $cmd.Split('"')[1]
-        $args = $cmd.Substring($exe.Length + 2)
+    if ($cmd -match '^"([^"]+)"\s*(.*)$') {
+        $exe = $Matches[1]
+        $args = $Matches[2]
+    } elseif ($cmd -match '^(.*\.exe)(\s+.*)?$') {
+        $exe = $Matches[1]
+        $args = if ($Matches[2]) { $Matches[2].Trim() } else { "" }
     } else {
-        $parts = $cmd.Split(" ",2)
-        $exe = $parts[0]
+        $parts = $cmd.Split(" ", 2)
+        $exe = $parts[0].Trim('"')
         if ($parts.Length -gt 1) { $args = $parts[1] }
     }
 
     Write-Host "EXE: $exe"
     Write-Host "ARGS: $args"
 
-    # NÃO adiciona flags cegamente
+    # Tenta adicionar silent flag se for WinRAR ou similar e não houver args
+    if (-not $args -and ($exe -like "*WinRAR*" -or $exe -like "*uninstall.exe")) {
+        $args = "/S"
+        Write-Host "Auto-adicionando /S para desinstalação silenciosa"
+    }
+
     Start-Process -FilePath $exe -ArgumentList $args -Wait -ErrorAction SilentlyContinue
 }
 
