@@ -3,6 +3,8 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import iconv from 'iconv-lite';
 
 import bodyParser from 'body-parser';
 import cors from 'cors';
@@ -34,23 +36,17 @@ async function writeDb(data: any) {
   await fsp.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-import { exec } from 'child_process';
-import iconv from 'iconv-lite';
-
-// Helper customizado para lidar com encoding CP850 (Windows)
-async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: string, stderr: string }> {
+// Helper para execução de comandos retornando buffers brutos para depuração
+async function execWin(cmd: string, timeout = 60000): Promise<{ stdout: Buffer, stderr: Buffer }> {
   return new Promise((resolve, reject) => {
-    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 2 * 1024 * 1024 }, (error: any, stdout, stderr) => {
-      // Usamos CP850 para suportar acentos do CMD brasileiro
-      const outStr = iconv.decode(stdout as Buffer, 'cp850');
-      const errStr = iconv.decode(stderr as Buffer, 'cp850');
-      
+    exec(cmd, { encoding: 'buffer', timeout, maxBuffer: 1024 * 1024 * 10 }, (error: any, stdout, stderr) => {
       if (error) {
-        error.stdout = outStr;
-        error.stderr = errStr;
-        return reject(error);
+        const errObj = error as any;
+        errObj.stdoutRaw = stdout;
+        errObj.stderrRaw = stderr;
+        return reject(errObj);
       }
-      resolve({ stdout: outStr, stderr: errStr });
+      resolve({ stdout: stdout as Buffer, stderr: stderr as Buffer });
     });
   });
 }
@@ -179,163 +175,162 @@ async function startServer() {
       return res.status(404).json({ error: 'Script não encontrado no servidor' });
     }
 
+    // Criamos uma cópia temporária do script para injetar o comando de autodeleção
+    const tempScriptName = `tmp_${Date.now()}_${scriptName}`;
+    const tempScriptPath = path.join(SCRIPTS_DIR, tempScriptName);
+
     try {
       const { username, password } = creds;
       
+      // Lemos o conteúdo original e injetamos o comando de auto-exclusão do Windows Batch
+      // O comando (goto) 2>nul & del "%~f0" é um truque clássico para um .bat se deletar
+      const originalContent = fs.readFileSync(scriptPath, 'utf-8');
+      const modifiedContent = originalContent + '\r\n\r\nREM Auto-cleanup\r\n(goto) 2>nul & del "%~f0"\r\n';
+      fs.writeFileSync(tempScriptPath, modifiedContent);
+
       // No Windows nativo, psexec -c lida com o upload e execução em um passo só
-      // Adicionamos -f para forçar o backup/copy se já existir e -i se puder ser interativo
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -f -c "${scriptPath}"`;
+      // Adicionamos -f para forçar o backup/copy se já existir
+      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -f -c "${tempScriptPath}"`;
       
       console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
       const { stdout, stderr } = await execWin(runCmd, 120000);
       
-      const rawOutput = (stdout || '') + (stderr || '');
-      const output = cleanOutput(rawOutput);
-      res.json({ output: output || 'Script executado com sucesso.' });
+      // Preservamos o máximo possível usando decoding cp850 que é o padrão Windows BR
+      const outStr = iconv.decode(stdout, 'cp850');
+      const errStr = iconv.decode(stderr, 'cp850');
+      
+      const combined = [outStr, errStr].filter(Boolean).join('\n');
+      res.json({ output: cleanOutput(combined) || 'Script executado.' });
     } catch (err: any) {
-      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-      const cleaned = cleanOutput(rawError);
-      res.status(500).json({ error: cleaned || rawError || 'Erro ao executar script' });
+      const outErr = err.stdoutRaw ? iconv.decode(err.stdoutRaw, 'cp850') : '';
+      const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
+      const msgErr = err.message || '';
+      const combined = [outErr, errErr, msgErr].filter(Boolean).join('\n');
+      res.status(500).json({ error: cleanOutput(combined) });
+    } finally {
+      // Cleanup do arquivo temporário no servidor
+      try {
+        if (fs.existsSync(tempScriptPath)) {
+          fs.unlinkSync(tempScriptPath);
+        }
+      } catch (cleanupErr) {
+        console.error('Erro ao limpar script temporário local:', cleanupErr);
+      }
     }
   });
 
   app.post('/api/shell', async (req, res) => {
     const { host, command } = req.body;
     const db = await readDb();
-    const machine = db.machines.find((m: any) => m.ip === host);
-
-    if (!machine) {
-      return res.status(404).json({ error: 'Host não encontrado na base de dados' });
-    }
-
     const creds = db.credentials;
+    
     if (!creds || !creds.username || !creds.password) {
-      return res.status(400).json({ error: 'Credenciais globais não configuradas' });
+      return res.status(400).json({ error: 'Credenciais nao configuradas.' });
     }
 
     const { username, password } = creds;
 
     try {
-      // Determinamos a melhor forma de chamar o comando
-      let fullCmd;
-      if (command.toLowerCase().includes('powershell')) {
-          // Para powershell, evitamos o cmd /c se possível para não quebrar pipes
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
-      } else {
-          // No Windows, envolvemos o comando em aspas para o CMD
-          const escapedCommand = command.replace(/"/g, '""');
-          fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-      }
+      // Use -h for elevated session (best for ipconfig, qwinsta, etc)
+      const escapedCommand = command.replace(/"/g, '""');
+      const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
       
-      console.log(`[SHELL_WIN] ${fullCmd}`);
+      console.log(`[SHELL_REMOTO] ${fullCmd}`);
 
-      const { stdout, stderr } = await execWin(fullCmd, 45000);
-
-      const rawOutput = (stdout || '') + (stderr || '');
-      const output = cleanOutput(rawOutput) || 'Comando executado com sucesso (sem retorno).';
-
-      res.json({ output });
+      const { stdout, stderr } = await execWin(fullCmd, 60000);
+      
+      // Decodificamos usando CP850 mas sem remover nulls ou outras filtragens pesadas no estágio inicial
+      const outStr = iconv.decode(stdout, 'cp850');
+      const errStr = iconv.decode(stderr, 'cp850');
+      
+      const combined = outStr + errStr;
+      res.json({ output: cleanOutput(combined) || 'Comando finalizado.' });
     } catch (err: any) {
-      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-      const cleaned = cleanOutput(rawError);
-      res.status(500).json({ error: cleaned || rawError || 'Erro na conexão PsExec' });
+      const outErr = err.stdoutRaw ? iconv.decode(err.stdoutRaw, 'cp850') : '';
+      const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
+      const msgErr = err.message || '';
+      const combined = outErr + errErr + msgErr;
+      res.status(500).json({ error: cleanOutput(combined) });
     }
   });
 
   app.post('/api/exec', async (req, res) => {
-    const { hosts, command, username, password } = req.body;
-    if (!hosts || !command) return res.status(400).json({ error: 'Dados incompletos' });
-    
+    const { hosts, command, username: bodyUsername, password: bodyPassword } = req.body;
+    const db = await readDb();
+    const username = bodyUsername || db.credentials?.username;
+    const password = bodyPassword || db.credentials?.password;
+
+    if (!hosts || !Array.isArray(hosts) || !command) {
+      return res.status(400).json({ error: 'Dados incompletos' });
+    }
+
     try {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            let fullCmd;
-            if (command.toLowerCase().includes('powershell')) {
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner ${command}`;
-            } else {
-                const escapedCommand = command.replace(/"/g, '""');
-                fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-            }
+            const escapedCommand = command.replace(/"/g, '""');
+            const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
             
-            console.log(`[EXEC_WIN] ${fullCmd}`);
+            console.log(`[BULK_EXEC] ${fullCmd}`);
 
             const { stdout, stderr } = await execWin(fullCmd, 60000);
             
-            const rawOutput = (stdout || '') + (stderr || '');
-            const cleaned = cleanOutput(rawOutput);
+            const outStr = iconv.decode(stdout, 'cp850');
+            const errStr = iconv.decode(stderr, 'cp850');
+            const combined = outStr + errStr;
+            const cleaned = cleanOutput(combined);
             
-            return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
+            return { host, status: 'success', output: cleaned || 'Executado.' };
           } else {
             // Local fallback
             const { stdout, stderr } = await execWin(command);
-            return { host, status: 'success', output: stdout + stderr };
+            const outStr = iconv.decode(stdout, 'cp850');
+            const errStr = iconv.decode(stderr, 'cp850');
+            const combined = outStr + errStr;
+            return { host, status: 'success', output: cleanOutput(combined) };
           }
         } catch (err: any) {
-          const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-          const cleaned = cleanOutput(rawError);
+          const outErr = err.stdoutRaw ? iconv.decode(err.stdoutRaw, 'cp850') : '';
+          const errErr = err.stderrRaw ? iconv.decode(err.stderrRaw, 'cp850') : '';
+          const combined = outErr + errErr + (err.message || '');
+          const cleaned = cleanOutput(combined);
           return { 
             host, 
             status: 'failed', 
-            output: cleaned || rawError || 'Erro desconhecido durante execução remota'
+            output: cleaned || 'Erro na execucao'
           };
         }
       }));
       res.json({ results });
     } catch (err) {
-      console.error('Erro na API de exec:', err);
+      console.error('Erro na API de execute:', err);
       res.status(500).json({ error: 'Erro interno no servidor' });
     }
   });
 
-  // Helper para limpar logs de header de ferramentas como PsExec
+  // Helper para retornar o output o mais fiel possível ao CMD original
   function cleanOutput(raw: string): string {
-    const bannerKeywords = [
-      'PsExec v',
-      'Sysinternals - www.sysinternals.com',
-      'Copyright (C)',
-      'Starting PsExec service on',
-      'Connecting with PsExec service on',
-      'PsExec service on',
-      'Connecting to',
-      'Starting cmd on',
-      'Copying authentication key to',
-      'exited on', 
-      'with error code',
-      'cmd exited on'
-    ];
-
-    const lines = raw.split(/\r?\n/);
-    const filtered = lines.filter(line => {
-      const l = line.trim();
-      if (!l) return false;
-      
-      // Prompt removal (e.g., C:\> or C:\Windows\system32>)
-      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
-
-      // Banner filtering
-      // Só removemos se a linha PARECER um banner, não se contiver apenas a palavra
-      // Se a linha for idêntica a um keyword ou começar com ele (comum para headers)
-      // Mas permitimos se a linha tiver dados úteis e apenas contiver a palavra (raro em banners)
-      const isBanner = bannerKeywords.some(kw => {
-        const lowerL = l.toLowerCase();
-        const lowerKw = kw.toLowerCase();
-        // Se a linha começa com o banner (PsExec v, Connecting to...)
-        if (lowerL.startsWith(lowerKw)) return true;
-        // Se a linha contém Copyright ou Sysinternals (geralmente banners inteiros)
-        if (lowerKw.includes('copyright') || lowerKw.includes('sysinternals')) {
-            if (lowerL.includes(lowerKw)) return true;
-        }
-        return false;
-      });
-
-      if (isBanner) return false;
-      
-      return true;
-    });
-
-    return filtered.join('\n').trim();
+    if (!raw) return '';
+    // Preserve characters but normalize line endings. Remove null bytes.
+    // PsExec often produces \r\r\n, so we normalize to single \n
+    return raw
+      .replace(/\0/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/\n\n+/g, '\n\n') // Prevent excessive empty lines
+      .trim();
   }
+
+  // Debug log endpoint
+  app.post('/api/save-debug', async (req, res) => {
+    try {
+      const { content } = req.body;
+      await fsp.writeFile('last_output_raw.txt', content);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: 'Erro ao salvar debug' });
+    }
+  });
 
   // Vite integration
   if (process.env.NODE_ENV !== 'production') {
