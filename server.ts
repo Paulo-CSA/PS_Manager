@@ -62,6 +62,7 @@ async function winExecute(options: {
     
     let executable = '';
     let args: string[] = [];
+    let thisCleanup: (() => void) | null = null;
 
     if (isLocal) {
       executable = 'cmd.exe';
@@ -81,10 +82,24 @@ async function winExecute(options: {
         const uniqueId = Math.floor(Math.random() * 100000);
         const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
         
-        // Append the redirection and cleanup logic requested by the user
-        const decoratedCommand = `${command} ^> ${remoteOutFile} ^& type ${remoteOutFile} ^& timeout /t 20 ^>nul ^& del ${remoteOutFile}`;
-        
-        args.push('cmd', '/c', decoratedCommand);
+        // Step 1: Execute, redirect, and type for capture
+        // Format: cmd /c "(command) > file 2>&1 & type file"
+        const captureCommand = `cmd /c "(${command}) > ${remoteOutFile} 2>&1 & type ${remoteOutFile}"`;
+        args.push('cmd', '/c', captureCommand);
+
+        // Setup cleanup process to run AFTER capture
+        const cleanupArgs = [
+          `\\\\${host}`,
+          '-u', username || '',
+          '-p', password || '',
+          '-accepteula', '-nobanner', '-h',
+          'cmd', '/c', `timeout /t 10 /nobreak >nul & del /f /q ${remoteOutFile}`
+        ].filter(v => v !== '');
+
+        thisCleanup = () => {
+          console.log(`[CLEANUP] Iniciando limpeza em ${host}: ${remoteOutFile}`);
+          spawn(executable, cleanupArgs, { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
+        };
       }
     }
 
@@ -105,11 +120,14 @@ async function winExecute(options: {
     const timeoutDuration = isScript ? 180000 : 120000;
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
+      if (thisCleanup) thisCleanup();
       reject(new Error(`Timeout na execução para ${host} (${timeoutDuration / 1000}s)`));
     }, timeoutDuration);
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (thisCleanup) thisCleanup();
+
       const stdoutRaw = Buffer.concat(stdoutChunks);
       const stderrRaw = Buffer.concat(stderrChunks);
       
