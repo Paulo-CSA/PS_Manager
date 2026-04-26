@@ -81,50 +81,72 @@ async function winExecute(options: {
       }
     }
 
-    // Local redirection approach on the server
-    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-    const localOutFile = path.join(STORAGE_DIR, `out_${uniqueId}.txt`);
+    // Construct the command to run ON THE REMOTE MACHINE
+    const remoteId = Math.floor(Math.random() * 100000);
+    const remoteOutFile = `C:\\out_${remoteId}.txt`;
     
-    // Properly quote arguments for cmd.exe
-    const quotedArgs = args.map(arg => {
-      if (/[ >&|^]/.test(arg)) {
-        return `"${arg}"`;
+    // Remote command block: executes user cmd, redirects to file, types it, waits, then deletes.
+    // We use parenthesized block for clean redirection.
+    const remoteCommandBlock = `cmd /c "(${command}) > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 15 /nobreak > nul & del /f /q ${remoteOutFile}"`;
+
+    // Strategy: Build the PsExec args
+    if (host === 'localhost' || host === '127.0.0.1') {
+      executable = 'cmd.exe';
+      args = ['/c', command];
+    } else {
+      executable = path.join(process.cwd(), 'psexec.exe');
+      args.push(`\\\\${host}`);
+      if (username) args.push('-u', username);
+      if (password) args.push('-p', password);
+      args.push('-accepteula', '-nobanner', '-h');
+      
+      if (isScript) {
+        args.push('-c', command);
+      } else {
+        args.push('cmd', '/c', remoteCommandBlock);
       }
-      return arg;
-    }).join(' ');
+    }
 
-    const fullCommand = `"${executable}" ${quotedArgs} > "${localOutFile}" 2>&1`;
-    console.log(`[EXEC] Host: ${host} | Local Redir: ${fullCommand}`);
+    // Local redirection approach on the server (API side)
+    const localId = Date.now() + '_' + Math.floor(Math.random() * 1000);
+    const localOutFile = path.join(STORAGE_DIR, `local_out_${localId}.txt`);
+    
+    // Re-construct the full local command string for a clean shell execution
+    const psexecCommand = `"${executable}" ` + args.map(a => (a.includes(' ') || a.includes('&') || a.includes('>') || a.includes('(')) ? `"${a}"` : a).join(' ');
+    const fullLocalCommand = `${psexecCommand} > "${localOutFile}" 2>&1`;
 
-    const child = spawn('cmd.exe', ['/c', fullCommand], {
+    console.log(`[EXEC] ${host} | RemoteRedir: ${remoteOutFile} | LocalRedir: out_${localId}.txt`);
+
+    const child = spawn('cmd.exe', ['/c', fullLocalCommand], {
       shell: false,
       windowsHide: true,
     });
 
-    const timeoutDuration = isScript ? 180000 : 95000;
+    const timeoutDuration = isScript ? 180000 : 110000; // Increased to accommodate remote wait
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       if (fs.existsSync(localOutFile)) try { fs.unlinkSync(localOutFile); } catch(e) {}
-      reject(new Error(`Timeout na execução remota (${timeoutDuration / 1000}s)`));
+      reject(new Error(`Timeout na execução para ${host} (${timeoutDuration/1000}s)`));
     }, timeoutDuration);
 
-    child.on('close', async (code) => {
+    child.on('close', (code) => {
       clearTimeout(timer);
       
-      try {
-        let stdout = '';
-        if (fs.existsSync(localOutFile)) {
-          const raw = fs.readFileSync(localOutFile);
-          stdout = iconv.decode(raw, 'cp850');
-          // Clean up the local file
-          try { fs.unlinkSync(localOutFile); } catch(e) {}
+      setTimeout(() => { // Small delay to ensure file write is flushed
+        try {
+          let output = '';
+          if (fs.existsSync(localOutFile)) {
+            const raw = fs.readFileSync(localOutFile);
+            output = iconv.decode(raw, 'cp850');
+            if (!output.trim()) output = iconv.decode(raw, 'utf-8');
+            try { fs.unlinkSync(localOutFile); } catch(e) {}
+          }
+          console.log(`[EXEC] ${host} Finalizado | Code: ${code} | Saída: ${output.length} bytes`);
+          resolve({ stdout: output, stderr: '', exitCode: code });
+        } catch (err) {
+          reject(err);
         }
-
-        console.log(`[EXEC] ${host} Done | Code: ${code} | Out: ${stdout.length} chars`);
-        resolve({ stdout, stderr: '', exitCode: code });
-      } catch (err) {
-        reject(err);
-      }
+      }, 500);
     });
 
     child.on('error', (err) => {
