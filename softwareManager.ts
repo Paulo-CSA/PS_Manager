@@ -5,34 +5,26 @@ import { Buffer } from 'buffer';
 const SOFTWARE_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
 
-# Fonte Principal: Registro (Desktop Apps como CCleaner, WinRAR, Firefox)
 $paths = @(
     'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
 
-$registryApps = Get-ItemProperty $paths | Where-Object { $_.DisplayName -ne $null } | ForEach-Object {
-    $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
-    $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
-    "$($_.DisplayName)###$ver###$pub"
-}
-
-# Fonte Secundária: Microsoft Store (Apps como BreeZip)
-$storeApps = if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
-    Get-AppxPackage | Where-Object { $_.Name -notmatch '^[0-9a-fA-F-]{8}-' -and $_.IsFramework -eq $false } | ForEach-Object {
-        "$($_.Name)###$($_.Version)###Microsoft Store"
+foreach ($path in $paths) {
+    Get-ItemProperty $path | ForEach-Object {
+        if ($_.DisplayName) {
+            $name = $_.DisplayName
+            $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
+            $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
+            
+            # Filtros básicos para remover ruído
+            if ($name -notmatch 'Update|Hotfix|Security|Microsoft Visual C\\+\\+') {
+                Write-Output "$name###$ver###$pub"
+            }
+        }
     }
-} else { @() }
-
-# Junta tudo, remove duplicados e limpa entradas irrelevantes
-$allApps = ($registryApps + $storeApps) | Select-Object -Unique | Where-Object { 
-    $_ -notmatch '^Update ' -and 
-    $_ -notmatch '^Security Update' -and
-    $_ -notmatch '^Hotfix'
-} | Sort-Object
-
-$allApps | ForEach-Object { Write-Output $_ }
+}
 `;
 
 /**
