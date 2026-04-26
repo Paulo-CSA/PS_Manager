@@ -57,62 +57,68 @@ async function winExecute(options: {
 
   return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
     const isLocal = host === 'localhost' || host === '127.0.0.1';
-    const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-    const localOutFile = path.join(STORAGE_DIR, `out_${uniqueId}.txt`);
-
-    let fullCommand = '';
+    
+    let executable = '';
+    let args: string[] = [];
 
     if (isLocal) {
-      fullCommand = `cmd /c "${command} > \\"${localOutFile}\\" 2>&1"`;
+      executable = 'cmd.exe';
+      args = ['/c', command];
     } else {
-      const psexecPath = path.join(process.cwd(), 'psexec.exe');
-      const remoteTemp = `C:\\Windows\\Temp\\out_${Math.floor(Math.random() * 10000)}.txt`;
-      
-      // Construct the command using user-validated escaping for local shell
-      // ^> and ^& ensure these are passed to PsExec, while > at the end is for local redirection
-      const remotePart = `cmd /c (${command}) ^> ${remoteTemp} 2^>^&1 ^& type ${remoteTemp} ^& timeout /t 20 /nobreak ^>nul ^& del /f /q ${remoteTemp}`;
-      
-      fullCommand = `"${psexecPath}" \\\\${host} -u "${username}" -p "${password}" -accepteula -nobanner -h ${remotePart} > "${localOutFile}" 2>&1`;
+      executable = path.join(process.cwd(), 'psexec.exe');
+      args.push(`\\\\${host}`);
+      if (username) args.push('-u', username);
+      if (password) args.push('-p', password);
+      args.push('-accepteula', '-nobanner', '-h');
+
+      if (isScript) {
+        args.push('-c', command);
+      } else {
+        // Construct the command exactly as user requested:
+        // cmd /c ipconfig ^> C:\Windows\Temp\out.txt ^& type C:\Windows\Temp\out.txt ^& timeout /t 20 ^>nul ^& del C:\Windows\Temp\out.txt
+        const remoteOutFile = "C:\\Windows\\Temp\\out.txt";
+        const remotePart = `${command} ^> ${remoteOutFile} ^& type ${remoteOutFile} ^& timeout /t 20 ^>nul ^& del ${remoteOutFile}`;
+        args.push('cmd', '/c', remotePart);
+      }
     }
 
-    console.log(`[EXEC] ${host} | Command: ${fullCommand}`);
+    console.log(`[EXEC] ${host} | Executing: ${executable} ${args.join(' ')}`);
 
-    const child = spawn('cmd.exe', ['/c', fullCommand], {
+    const child = spawn(executable, args, {
       shell: false,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
     });
+
+    let stdoutChunks: Buffer[] = [];
+    let stderrChunks: Buffer[] = [];
+
+    child.stdout.on('data', (data: Buffer) => stdoutChunks.push(data));
+    child.stderr.on('data', (data: Buffer) => stderrChunks.push(data));
 
     const timeoutDuration = isScript ? 180000 : 120000;
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      if (fs.existsSync(localOutFile)) try { fs.unlinkSync(localOutFile); } catch(e) {}
-      reject(new Error(`Timeout na execução para ${host} (${timeoutDuration/1000}s)`));
+      reject(new Error(`Timeout na execução para ${host} (${timeoutDuration / 1000}s)`));
     }, timeoutDuration);
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      const stdoutRaw = Buffer.concat(stdoutChunks);
+      const stderrRaw = Buffer.concat(stderrChunks);
       
-      // Wait a bit for the file to be fully written
-      setTimeout(() => {
-        try {
-          let output = '';
-          if (fs.existsSync(localOutFile)) {
-            const raw = fs.readFileSync(localOutFile);
-            output = iconv.decode(raw, 'cp850');
-            if (!output.trim()) output = iconv.decode(raw, 'utf-8');
-            try { fs.unlinkSync(localOutFile); } catch(e) {}
-          }
-          console.log(`[EXEC] ${host} Finalizado | Code: ${code} | Out: ${output.length} bytes`);
-          resolve({ stdout: output, stderr: '', exitCode: code });
-        } catch (err) {
-          reject(err);
-        }
-      }, 500);
+      let stdout = iconv.decode(stdoutRaw, 'cp850');
+      let stderr = iconv.decode(stderrRaw, 'cp850');
+
+      if (!stdout.trim() && stdoutRaw.length > 0) stdout = iconv.decode(stdoutRaw, 'utf-8');
+      if (!stderr.trim() && stderrRaw.length > 0) stderr = iconv.decode(stderrRaw, 'utf-8');
+
+      console.log(`[EXEC] ${host} Finalizado | Code: ${code} | Out: ${stdoutRaw.length} bytes`);
+      resolve({ stdout, stderr, exitCode: code });
     });
 
     child.on('error', (err) => {
       clearTimeout(timer);
-      if (fs.existsSync(localOutFile)) try { fs.unlinkSync(localOutFile); } catch(e) {}
       reject(err);
     });
   });
