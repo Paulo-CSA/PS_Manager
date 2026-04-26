@@ -17,19 +17,21 @@ $hkuPaths = Get-ChildItem Registry::HKEY_USERS | ForEach-Object {
 
 $paths += $hkuPaths
 
-foreach ($path in $paths) {
-    Get-ItemProperty $path -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_.DisplayName) {
-            $name = $_.DisplayName
-            $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
-            $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
+& {
+    foreach ($path in $paths) {
+        Get-ItemProperty $path -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.DisplayName) {
+                $name = $_.DisplayName
+                $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
+                $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
 
-            if ($name -notmatch 'Update|Hotfix|Security|Microsoft Visual C\\+\\+') {
-                "$name###$ver###$pub"
+                if ($name -notmatch 'Update|Hotfix|Security|Microsoft Visual C\+\+') {
+                    "$name###$ver###$pub"
+                }
             }
         }
     }
-}
+} | Out-String -Width 4096
 `;
 
 /**
