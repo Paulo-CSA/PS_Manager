@@ -348,20 +348,28 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    // Comando PowerShell otimizado conforme sugestão do usuário
-    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName"`, [host]);
+    // Comando reg query sugerido pelo usuário para listar aplicativos instalados
+    const results = await executeRemote(`reg query HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall /s /v DisplayName & reg query HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall /s /v DisplayName`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
-      const apps = results[0].output.split('\n')
-        .map((a: string) => a.trim())
-        .filter((a: string) => 
-          a && 
-          !a.includes('Name') && 
-          !a.includes('----') &&
-          !a.includes('[') &&
-          !a.startsWith('Success') &&
-          !a.includes('PsExec')
+      const output = results[0].output || '';
+      const apps = output
+        .split(/\r?\n/)
+        .map((line: string) => {
+          const l = line.trim();
+          // Formato esperado do reg query: "DisplayName    REG_SZ    Nome do App"
+          // Usamos Regex para capturar tudo após REG_SZ (que pode ter múltiplos espaços)
+          const match = l.match(/DisplayName\s+REG_SZ\s+(.*)/i);
+          if (match && match[1]) {
+            return match[1].trim();
+          }
+          return null;
+        })
+        .filter((a: string | null): a is string => 
+          !!a && 
+          !a.toLowerCase().includes('psexec') &&
+          a.length > 1
         );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
@@ -371,8 +379,8 @@ const App = () => {
   const uninstallApp = async (appName: string) => {
     if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
     const host = selectedHosts[0];
-    // Comando via PowerShell otimizado
-    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace '/I', '/X'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
+    // Comando via PowerShell otimizado para desinstalação verificando ambos os registros (32 e 64 bits)
+    const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$paths = @('HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); $app = Get-ItemProperty $paths | Where-Object { $_.DisplayName -eq '${appName.trim()}' } | Select-Object -First 1; if ($app.UninstallString) { $u = $app.UninstallString; if ($u -match 'MsiExec.exe') { $u = $u -replace '/I', '/X' + ' /quiet /norestart' } else { if ($u -notmatch '/quiet') { $u += ' /S /quiet /verysilent /norestart' } }; Start-Process cmd.exe -ArgumentList '/c', $u -Wait }"`;
     await executeRemote(uninstallCmd, [host]);
     setIsAppModalOpen(false);
   };
