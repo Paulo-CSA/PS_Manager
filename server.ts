@@ -80,7 +80,7 @@ async function winExecute(options: {
         const localBatPath = path.join(TEMP_BATCH_DIR, `cmd_${uniqueId}.bat`);
         const remoteOutFile = `C:\\psexec_temp_${uniqueId}.txt`;
         
-        const batContent = `@echo off\r\n${command} > "${remoteOutFile}" 2>&1\r\nif exist "${remoteOutFile}" (\r\n  type "${remoteOutFile}"\r\n  timeout /t 1 /nobreak > nul 2>&1\r\n  del /f /q "${remoteOutFile}"\r\n)`;
+        const batContent = `@echo off\r\n${command} > "C:\\out.txt" 2>&1\r\ntype "C:\\out.txt"\r\ntimeout /t 5 /nobreak > nul 2>&1\r\ndel /f /q "C:\\out.txt"`;
         
         try {
           await fsp.writeFile(localBatPath, batContent);
