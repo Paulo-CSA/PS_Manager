@@ -70,21 +70,27 @@ async function winExecute(options: {
       if (username) args.push('-u', username);
       if (password) args.push('-p', password);
 
-      args.push('-accepteula', '-nobanner');
+      // -h: elevated, -accepteula/-nobanner: clean, -i: helps with output capture for some commands
+      args.push('-accepteula', '-nobanner', '-h', '-i'); 
 
       if (isScript) {
         args.push('-c', command); 
       } else {
-        // Run cmd /c to handle internal commands like ipconfig, qwinsta, etc.
-        args.push('cmd.exe', '/c', command);
+        // Only use cmd /c if needed, otherwise run directly
+        if (command.trim().includes(' ') || command.includes('&') || command.includes('|') || command.includes('>')) {
+          args.push('cmd', '/c', command);
+        } else {
+          args.push(command);
+        }
       }
     }
 
-    console.log(`[EXEC] Running: ${executable} ${args.join(' ')}`);
+    console.log(`[EXEC] Cmd: ${executable} ${args.join(' ')}`);
 
     const child = spawn(executable, args, {
       shell: false,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'] 
     });
 
     let stdoutChunks: Buffer[] = [];
@@ -151,24 +157,21 @@ function formatOutput(stdout: string, stderr: string): string {
     'microsoft (r) windows (r)'
   ];
 
-  return combined.split('\n')
-    .filter(line => {
-      const l = line.trim().toLowerCase();
-      if (!l) return false;
-      
-      // Skip common informational noise
-      if (filterPhrases.some(p => l.includes(p))) return false;
-      
-      // Skip the command echo if PsExec does it
-      if (l.startsWith('cmd /c')) return false;
+  const lines = combined.split('\n');
+  const filtered = lines.filter(line => {
+    const l = line.trim().toLowerCase();
+    if (!l) return false;
+    
+    // Skip common informational noise
+    if (filterPhrases.some(p => l.includes(p))) return false;
+    
+    // Skip common windows prompt patterns like C:\>
+    if (/^[a-z]:\\.*>$/i.test(l)) return false;
 
-      // Skip common windows prompt patterns like C:\>
-      if (/^[a-z]:\\.*>$/i.test(l)) return false;
+    return true;
+  });
 
-      return true;
-    })
-    .join('\n')
-    .trim() || combined;
+  return filtered.join('\n').trim() || combined;
 }
 
 async function startServer() {
