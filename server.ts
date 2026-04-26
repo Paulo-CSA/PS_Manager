@@ -138,30 +138,7 @@ async function winExecute(options: {
 function formatOutput(stdout: string, stderr: string): string {
   const combined = (stdout + '\n' + stderr).trim();
   if (!combined) return 'Vazio (nenhum dado retornado do console).';
-
-  const filterPhrases = [
-    'psexec v',
-    'copyright',
-    'sysinternals',
-    'starting psexec service',
-    'connecting to',
-    'connected to',
-    'exited on',
-    'psexec.exe'
-  ];
-
-  const lines = combined.split('\n');
-  const filtered = lines.filter(line => {
-    const l = line.trim().toLowerCase();
-    if (!l) return true; // Keep empty lines for spacing
-    
-    // Skip PsExec specific noise only
-    if (filterPhrases.some(p => l.includes(p))) return false;
-    
-    return true;
-  });
-
-  return filtered.join('\n').trim() || combined;
+  return combined;
 }
 
 async function startServer() {
