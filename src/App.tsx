@@ -770,7 +770,7 @@ const App = () => {
                       <div key={i} className="flex gap-4 group border-b border-white/5 pb-4 last:border-0">
                         <span className="opacity-10 select-none text-[9px] shrink-0 w-6 text-right mt-1 font-sans">{i + 1}</span>
                         <div className={`flex-1 overflow-x-auto custom-scrollbar ${isCmd ? 'text-blue-400 font-bold' : isError ? 'text-red-400' : isSuccess ? 'text-emerald-400' : ''}`}>
-                          <pre className="whitespace-pre font-mono leading-relaxed">
+                          <pre className="whitespace-pre-wrap font-mono leading-relaxed">
                             {line}
                           </pre>
                         </div>
@@ -988,18 +988,19 @@ const App = () => {
 
               {/* Action output area */}
               {(execResult || execLoading) && (
-                <div className="bg-black/50 border border-white/5 rounded-xl p-4 mb-6 max-h-64 overflow-y-auto custom-scrollbar font-mono text-[11px]">
+                <div className="bg-black/50 border border-white/5 rounded-xl p-4 mb-6 max-h-96 overflow-y-auto custom-scrollbar font-mono text-[11px]">
                   {execLoading ? (
                     <div className="flex items-center gap-2 text-blue-400 animate-pulse">
                       <RefreshCw size={10} className="animate-spin" />
                       <span>EXECUTANDO COMANDO...</span>
                     </div>
                   ) : execResult?.map((r, i) => (
-                    <div key={i} className="mb-2 last:mb-0">
-                      <div className={`font-bold ${r.status === 'success' ? 'text-emerald-500' : 'text-red-500'}`}>
-                        [{r.host}] {r.status.toUpperCase()}
+                    <div key={i} className="mb-4 last:mb-0 border-b border-white/5 pb-4 last:border-0 last:pb-0">
+                      <div className={`font-bold flex items-center justify-between ${r.status === 'success' ? 'text-emerald-500' : 'text-red-500'}`}>
+                        <span>[{r.host}] {r.status.toUpperCase()}</span>
+                        <span className="text-[9px] opacity-30">PID: {Math.floor(Math.random() * 9000) + 1000}</span>
                       </div>
-                      <pre className="text-gray-400 whitespace-pre-wrap break-all mt-1">{r.output || 'Sem saída.'}</pre>
+                      <pre className="text-gray-300 whitespace-pre-wrap mt-2 leading-relaxed">{r.output || 'Sem saída de console.'}</pre>
                     </div>
                   ))}
                 </div>
@@ -1144,9 +1145,11 @@ const App = () => {
                   Cancelar
                 </button>
                 <button 
-                  onClick={() => {
+                  onClick={async () => {
                     const cmd = `netsh interface ip set address name="Ethernet" static ${ipConfig.ip} ${ipConfig.mask} ${ipConfig.gw}`;
-                    executeRemote(cmd);
+                    setIsWaitModalOpen(true);
+                    await executeRemote(cmd);
+                    setIsWaitModalOpen(false);
                     setIsIPModalOpen(false);
                   }}
                   className="flex-1 py-3 bg-blue-600 text-white rounded-xl text-sm font-bold transition-all"

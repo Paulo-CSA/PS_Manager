@@ -229,17 +229,27 @@ async function startServer() {
     const { username, password } = creds;
 
     try {
-      // Use -h for elevated session (best for ipconfig, qwinsta, etc)
       const escapedCommand = command.replace(/"/g, '""');
       const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
       
-      console.log(`[SHELL_REMOTO] ${fullCmd}`);
+      console.log(`[SHELL_REMOTO] Executando: ${fullCmd}`);
 
       const { stdout, stderr } = await execWin(fullCmd, 60000);
       
-      const combined = (stdout || '') + (stderr || '');
-      res.json({ output: cleanOutput(combined) || 'Comando executado sem retorno textual.' });
+      // Log exactly what we got for debugging
+      console.log(`[SHELL_REMOTO] STDOUT LEN: ${stdout?.length || 0}`);
+      console.log(`[SHELL_REMOTO] STDERR LEN: ${stderr?.length || 0}`);
+      if (stdout) console.log(`[SHELL_REMOTO] STDOUT: ${stdout.substring(0, 200)}...`);
+
+      // Join with clear separation
+      let output = (stdout || '').trim();
+      if (stderr && stderr.trim()) {
+        output += (output ? '\n\n--- [SYSTEM/DIAG] ---\n' : '') + stderr.trim();
+      }
+
+      res.json({ output: cleanOutput(output) || 'Comando executado (Sem retorno de texto).' });
     } catch (err: any) {
+      console.error(`[SHELL_REMOTO] ERRO:`, err.message);
       const errorMsg = (err.stdout || '') + (err.stderr || '') + (err.message || '');
       res.status(500).json({ error: cleanOutput(errorMsg) || 'Erro na execucao remota' });
     }
@@ -262,21 +272,27 @@ async function startServer() {
             const escapedCommand = command.replace(/"/g, '""');
             const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
             
-            console.log(`[BULK_EXEC] ${fullCmd}`);
+            console.log(`[BULK_EXEC] ${host} -> ${command}`);
 
             const { stdout, stderr } = await execWin(fullCmd, 60000);
             
-            const combined = (stdout || '') + (stderr || '');
-            const cleaned = cleanOutput(combined);
+            // Format for frontend
+            let output = (stdout || '').trim();
+            if (stderr && stderr.trim()) {
+              output += (output ? '\n\n--- [SYSTEM/DIAG] ---\n' : '') + stderr.trim();
+            }
+
+            const cleaned = cleanOutput(output);
+            console.log(`[BULK_EXEC] ${host} Result: ${cleaned.substring(0, 50)}...`);
             
             return { host, status: 'success', output: cleaned || 'Executado sem retorno.' };
           } else {
-            // Local fallback
             const { stdout, stderr } = await execWin(command);
             const combined = (stdout || '') + (stderr || '');
             return { host, status: 'success', output: cleanOutput(combined) };
           }
         } catch (err: any) {
+          console.error(`[BULK_EXEC] ${host} FAILED:`, err.message);
           const rawError = (err.stdout || '') + (err.stderr || '') + (err.message || '');
           const cleaned = cleanOutput(rawError);
           return { 
@@ -296,14 +312,33 @@ async function startServer() {
   // Helper para retornar o output o mais fiel possível ao CMD original
   function cleanOutput(raw: string): string {
     if (!raw) return '';
-    // Preserve characters but normalize line endings. Remove null bytes.
-    // PsExec often produces \r\r\n, so we normalize to single \n
-    return raw
+    
+    // PsExec banner characters to always remove
+    const bannerPrefix = "PsExec v";
+    const bannerCopyright = "Copyright (C) 2001-2023 Mark Russinovich";
+    const bannerUrl = "Sysinternals - www.sysinternals.com";
+
+    let lines = raw
       .replace(/\0/g, '')
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n')
-      .replace(/\n\n+/g, '\n\n') // Prevent excessive empty lines
-      .trim();
+      .split('\n');
+
+    // Filter out PsExec noise lines
+    const filtered = lines.filter(line => {
+      const l = line.trim();
+      if (!l) return true; // keep empty lines for structure
+      if (l.startsWith(bannerPrefix)) return false;
+      if (l.includes(bannerCopyright)) return false;
+      if (l.includes(bannerUrl)) return false;
+      if (l.includes("Starting PsExec service on")) return false;
+      if (l.includes("Connecting to")) return false;
+      if (l.includes("Starting cmd on")) return false;
+      if (l.includes("cmd exited on") && l.includes("with error code 0")) return false;
+      return true;
+    });
+
+    return filtered.join('\n').trim();
   }
 
   // Debug log endpoint
