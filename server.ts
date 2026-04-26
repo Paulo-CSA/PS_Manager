@@ -2,6 +2,7 @@ import net from 'net';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import bodyParser from 'body-parser';
 import cors from 'cors';
@@ -47,30 +48,34 @@ async function writeDb(data: any) {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Robust execution using exec instead of spawn to leverage built-in buffering.
+ * Robust execution using local file redirection to ensure 100% output capture.
  */
-function runWithExec(cmd: string): Promise<{ out: string; err: string; code: number | null }> {
+function runWithLocalRedirection(fullCmd: string): Promise<{ out: string; err: string; code: number | null }> {
   return new Promise((resolve) => {
-    console.log(`[EXEC_CMD] ${cmd}`);
-    exec(cmd, { 
-      maxBuffer: 1024 * 1024 * 100, // 100 MB buffer
-      encoding: 'buffer',
-      windowsHide: true,
-    }, (error, stdout, stderr) => {
-      const code = error ? (error.code as number || 1) : 0;
-      
-      const decode = (b: any) => {
-        if (!b || b.length === 0) return '';
-        const buf = Buffer.from(b);
-        // Try Windows legacy first, then fallback to UTF-8
-        let s = iconv.decode(buf, 'cp850');
-        if (!s.trim() && buf.length > 0) s = iconv.decode(buf, 'utf-8');
-        return s.replace(/\0/g, ''); // Remove null bytes
-      };
+    const tempFile = path.join(os.tmpdir(), `psexec_out_${Date.now()}_${Math.floor(Math.random() * 1000)}.txt`);
+    const cmdWithRedir = `(${fullCmd}) > "${tempFile}" 2>&1`;
+    
+    console.log(`[EXEC_REDIR] ${cmdWithRedir}`);
+
+    exec(cmdWithRedir, { windowsHide: true, timeout: 300000 }, (error) => {
+      let output = '';
+      let code = error ? (error.code || 1) : 0;
+
+      try {
+        if (fs.existsSync(tempFile)) {
+          const raw = fs.readFileSync(tempFile);
+          output = iconv.decode(raw, 'cp850');
+          if (!output.trim() && raw.length > 0) output = iconv.decode(raw, 'utf-8');
+          output = output.replace(/\0/g, ''); // Fix null bytes
+          fs.unlinkSync(tempFile); // Cleanup
+        }
+      } catch (e) {
+        console.error("Error reading temp file:", e);
+      }
 
       resolve({
-        out: decode(stdout),
-        err: decode(stderr),
+        out: output,
+        err: '',
         code
       });
     });
@@ -79,8 +84,7 @@ function runWithExec(cmd: string): Promise<{ out: string; err: string; code: num
 
 /**
  * Robust execution engine for Windows.
- * Handles PsExec and direct CMD execution for localhost.
- * Executes in 3 stages for remote machines: 1. Create, 2. Read, 3. Cleanup.
+ * Handles PsExec and direct CMD execution.
  */
 async function winExecute(options: {
   host: string;
@@ -94,7 +98,7 @@ async function winExecute(options: {
 
   if (isLocal) {
     console.log(`[EXEC] Local | Command: ${command}`);
-    const res = await runWithExec(`cmd /c "${command}"`);
+    const res = await runWithLocalRedirection(`cmd /c "${command}"`);
     return { stdout: res.out, stderr: res.err, exitCode: res.code };
   }
 
@@ -103,39 +107,20 @@ async function winExecute(options: {
   const baseAuth = `${psexec} \\\\${host} ${authStr} -accepteula -nobanner -h`;
 
   try {
-    if (isScript) {
-      console.log(`[EXEC] ${host} | Script: ${command}`);
-      const res = await runWithExec(`${baseAuth} -c "${command}"`);
-      return { stdout: res.out, stderr: res.err, exitCode: res.code };
-    } else {
-      const uniqueId = Math.floor(Math.random() * 100000);
-      const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
+    const fullCmd = isScript ? `${baseAuth} -c "${command}"` : `${baseAuth} cmd /c "${command}"`;
+    const res = await runWithLocalRedirection(fullCmd);
+    
+    // PsExec cleanup
+    const cleanStdout = res.out.replace(/PsExec v.*?\n/gi, '')
+                               .replace(/Copyright.*?\n/gi, '')
+                               .replace(/Starting.*?on.*?\.\.\./gi, '')
+                               .replace(/.*?exited on.*?with error code.*?\./gi, '')
+                               .trim();
 
-      // 1. CREATE FILE (Use PowerShell for more robust redirection)
-      console.log(`[EXEC] ${host} [STEP 1] Criando: ${remoteOutFile}`);
-      const createCmd = `${baseAuth} cmd /c "(${command}) > ${remoteOutFile} 2>&1"`;
-      await runWithExec(createCmd);
-
-      // Wait for flush
-      await sleep(5000);
-
-      // 2. READ FILE (Using PowerShell to read the entire file into memory before sending)
-      console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
-      const readCmd = `${baseAuth} powershell -NoProfile -Command "If(Test-Path '${remoteOutFile}') { [IO.File]::ReadAllText('${remoteOutFile}') } Else { Write-Error 'File not found' }"`;
-      const readRes = await runWithExec(readCmd);
-      
-      console.log(`[READ INFO] ${host} chars lidos: ${readRes.out.length}`);
-
-      // 3. DELETE FILE (Cleanup)
-      console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
-      const cleanupCmd = `${baseAuth} cmd /c "ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}"`;
-      spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
-
-      return { stdout: readRes.out, stderr: readRes.err, exitCode: readRes.code };
-    }
+    return { stdout: cleanStdout || res.out, stderr: res.err, exitCode: res.code };
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
-    throw err;
+    return { stdout: '', stderr: err.message, exitCode: 1 };
   }
 }
 
