@@ -34,10 +34,89 @@ async function writeDb(data: any) {
   await fsp.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-import { exec } from 'child_process';
+import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+
+/**
+ * Nova implementação robusta do execWin usando spawn para capturar saída em tempo real
+ * e resolver problemas de buffer/captura do PsExec no Windows.
+ */
+async function execWin(options: { 
+  host: string, 
+  command?: string, 
+  username?: string, 
+  password?: string, 
+  isScript?: boolean, 
+  scriptPath?: string 
+}) {
+  return new Promise<{ stdout: string, stderr: string, exitCode: number | null }>((resolve, reject) => {
+    const { host, command, username, password, isScript, scriptPath } = options;
+    
+    // Se for localhost, executa direto sem PsExec
+    if (host === 'localhost' || host === '127.0.0.1') {
+      const child = spawn('cmd.exe', ['/c', command || ''], { shell: true });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => stdout += d.toString());
+      child.stderr.on('data', (d) => stderr += d.toString());
+      child.on('close', (code) => resolve({ stdout, stderr, exitCode: code }));
+      child.on('error', reject);
+      return;
+    }
+
+    const args = [`\\\\${host}`];
+    
+    if (username) args.push('-u', username);
+    if (password) args.push('-p', password);
+    
+    args.push('-accepteula', '-nobanner');
+    
+    if (isScript && scriptPath) {
+      args.push('-c', scriptPath);
+    } else if (command) {
+      // cmd /c garante que o comando seja interpretado corretamente pelo ambiente Windows remoto
+      args.push('cmd', '/c', command);
+    }
+
+    console.log(`[EXEC_WIN_SPAWN] Comando: psexec ${args.join(' ')}`);
+
+    const child = spawn('psexec', args, {
+      shell: true,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+    });
+
+    child.stderr.on('data', (data) => {
+      const chunk = data.toString();
+      stderr += chunk;
+    });
+
+    // Timeout de segurança
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error('Tempo limite de execução excedido (PsExec)'));
+    }, 60000);
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      resolve({ stdout, stderr, exitCode: code });
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
 
 async function startServer() {
   const app = express();
@@ -165,57 +244,44 @@ async function startServer() {
 
     try {
       const { username, password } = creds;
+      const result = await execWin({
+        host,
+        username,
+        password,
+        isScript: true,
+        scriptPath
+      });
       
-      // No Windows nativo, psexec -c lida com o upload e execução em um passo só
-      const runCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner -c "${scriptPath}"`;
-      
-      console.log(`[SCRIPT_EXEC_WIN] ${runCmd}`);
-      const { stdout, stderr } = await execAsync(runCmd, { timeout: 120000 });
-      
-      const output = cleanOutput(stdout + stderr);
-      res.json({ output: output || 'Script executado com sucesso e removido da máquina alvo.' });
+      const output = cleanOutput(result.stdout + result.stderr);
+      res.json({ output: output || 'Script executado com sucesso.' });
     } catch (err: any) {
-      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-      res.status(500).json({ error: cleanOutput(rawError) || 'Erro ao executar script' });
+      res.status(500).json({ error: cleanOutput(err.message || 'Erro ao executar script') });
     }
   });
 
   app.post('/api/shell', async (req, res) => {
     const { host, command } = req.body;
     const db = await readDb();
-    const machine = db.machines.find((m: any) => m.ip === host);
-
-    if (!machine) {
-      return res.status(404).json({ error: 'Host não encontrado na base de dados' });
-    }
-
     const creds = db.credentials;
+
     if (!creds || !creds.username || !creds.password) {
       return res.status(400).json({ error: 'Credenciais globais não configuradas' });
     }
 
-    const { username, password } = creds;
-
     try {
-      // No Windows, escapamos as aspas duplas se existirem no comando
-      const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-      
-      console.log(`[SHELL_WIN] ${fullCmd}`);
-
-      const { stdout, stderr } = await execAsync(fullCmd, { 
-        timeout: 30000,
-        maxBuffer: 1024 * 512 
+      const result = await execWin({
+        host,
+        command,
+        username: creds.username,
+        password: creds.password
       });
 
-      const rawOutput = (stdout || '') + (stderr || '');
+      const rawOutput = result.stdout + result.stderr;
       const output = cleanOutput(rawOutput) || 'Comando executado.';
 
       res.json({ output });
     } catch (err: any) {
-      const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-      const detailedError = cleanOutput(rawError) || 'Erro na conexão PsExec';
-      res.status(500).json({ error: detailedError });
+      res.status(500).json({ error: cleanOutput(err.message || 'Erro na conexão PsExec') });
     }
   });
 
@@ -226,33 +292,22 @@ async function startServer() {
     try {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
-          if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
-            const escapedCommand = command.replace(/"/g, '""');
-            const fullCmd = `psexec \\\\${host} -u ${username} -p ${password} -accepteula -nobanner cmd /c "${escapedCommand}"`;
-            
-            console.log(`[EXEC_WIN] ${fullCmd}`);
-
-            const { stdout, stderr } = await execAsync(fullCmd, { 
-              timeout: 60000,
-              maxBuffer: 1024 * 1024 
-            });
-            
-            const rawOutput = (stdout || '') + (stderr || '');
-            const cleaned = cleanOutput(rawOutput);
-            
-            return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
-          } else {
-            // Local fallback
-            const { stdout, stderr } = await execAsync(command);
-            return { host, status: 'success', output: stdout + stderr };
-          }
+          const result = await execWin({
+            host,
+            command,
+            username,
+            password
+          });
+          
+          const rawOutput = result.stdout + result.stderr;
+          const cleaned = cleanOutput(rawOutput);
+          
+          return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
         } catch (err: any) {
-          const rawError = (err.stdout || '') + (err.stderr || err.message || '');
-          const detailedError = cleanOutput(rawError) || 'Erro desconhecido';
           return { 
             host, 
             status: 'failed', 
-            output: `Erro de execução remota:\n${detailedError}`
+            output: `Erro de execução:\n${cleanOutput(err.message || 'Falha no processo')}`
           };
         }
       }));
