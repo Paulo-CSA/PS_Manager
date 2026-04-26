@@ -72,6 +72,16 @@ const App = () => {
   const [installedApps, setInstalledApps] = useState<string[]>([]);
   const [tempExecHost, setTempExecHost] = useState<string[] | null>(null);
   
+  const [verboseMode, setVerboseMode] = useState(false);
+
+  // Auto-scroll logs
+  const logEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [log]);
+
+  const clearLogs = () => setLog([]);
+
   // Guard to prevent initial save loop
   const isInitialized = useRef(false);
 
@@ -743,19 +753,27 @@ const App = () => {
 
               {/* Console Output */}
               <div className="bg-[#111] rounded-2xl border border-white/5 p-4 shadow-inner overflow-hidden flex flex-col h-[300px]">
-                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-white/5">
-                  <Terminal size={14} className="text-gray-500" />
-                  <span className="text-[10px] font-mono uppercase text-gray-500 tracking-widest">Saída do Console</span>
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5">
+                  <div className="flex items-center gap-2">
+                    <Terminal size={14} className="text-gray-500" />
+                    <span className="text-[10px] font-mono uppercase text-gray-500 tracking-widest">Saída do Console</span>
+                  </div>
+                  <button 
+                    onClick={clearLogs}
+                    className="text-[10px] font-mono uppercase text-gray-500 hover:text-red-400 transition-colors"
+                  >
+                    [Limpar Console]
+                  </button>
                 </div>
                 <div className="flex-1 overflow-y-auto font-mono text-xs space-y-1 text-blue-300/80 p-2">
                   {log.map((line, i) => (
-                    <div key={i} className="flex gap-2">
-                      <span className="opacity-30 select-none">{i + 1}</span>
-                      <span>{line}</span>
+                    <div key={i} className="flex gap-2 border-b border-white/[0.02] pb-1">
+                      <span className="opacity-30 select-none shrink-0 w-6 text-right">{i + 1}</span>
+                      <span className="whitespace-pre-wrap break-all">{line}</span>
                     </div>
                   ))}
                   {log.length === 0 && <span className="text-gray-700 italic">Pronto para execução...</span>}
-                  <div id="anchor" />
+                  <div ref={logEndRef} />
                 </div>
               </div>
             </>

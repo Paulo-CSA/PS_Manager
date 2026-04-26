@@ -3,119 +3,153 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import fs from 'fs';
 import fsp from 'fs/promises';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(process.cwd(), 'server_storage');
-const DATA_FILE = path.join(DATA_DIR, 'persistence.json');
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR);
-  console.log(`>>> Criado diretório de persistência em: ${DATA_DIR}`);
-}
+// Configuration for Persistence
+const STORAGE_DIR = path.join(process.cwd(), 'data_storage');
+const DB_FILE = path.join(STORAGE_DIR, 'db.json');
+const SCRIPTS_DIR = path.join(process.cwd(), 'remote_scripts');
 
-// Helper to read/write JSON database
+// Ensure directories exist
+[STORAGE_DIR, SCRIPTS_DIR].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`[INIT] Diretório criado: ${dir}`);
+  }
+});
+
+// Database Helpers
 async function readDb() {
   try {
-    const data = await fsp.readFile(DATA_FILE, 'utf-8');
-    return JSON.parse(data);
+    const content = await fsp.readFile(DB_FILE, 'utf-8');
+    return JSON.parse(content);
   } catch (e) {
-    return { machines: [], credentials: {} };
+    return { machines: [], credentials: { username: '', password: '' } };
   }
 }
 
 async function writeDb(data: any) {
-  await fsp.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+  await fsp.writeFile(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-import { spawn, exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
-
 /**
- * Nova implementação robusta do execWin usando spawn para capturar saída em tempo real
- * e resolver problemas de buffer/captura do PsExec no Windows.
+ * Robust execution engine for Windows.
+ * Handles PsExec and direct CMD execution for localhost.
  */
-async function execWin(options: { 
-  host: string, 
-  command?: string, 
-  username?: string, 
-  password?: string, 
-  isScript?: boolean, 
-  scriptPath?: string 
+async function winExecute(options: {
+  host: string;
+  command: string;
+  username?: string;
+  password?: string;
+  isScript?: boolean;
 }) {
-  return new Promise<{ stdout: string, stderr: string, exitCode: number | null }>((resolve, reject) => {
-    const { host, command, username, password, isScript, scriptPath } = options;
-    
-    // Se for localhost, executa direto sem PsExec
-    if (host === 'localhost' || host === '127.0.0.1') {
-      const child = spawn('cmd.exe', ['/c', command || ''], { shell: true });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d) => stdout += d.toString());
-      child.stderr.on('data', (d) => stderr += d.toString());
-      child.on('close', (code) => resolve({ stdout, stderr, exitCode: code }));
-      child.on('error', reject);
-      return;
+  const { host, command, username, password, isScript } = options;
+
+  return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
+    let executable = '';
+    let args: string[] = [];
+
+    const isLocal = host === 'localhost' || host === '127.0.0.1';
+
+    if (isLocal) {
+      // Direct CMD execution for local machine
+      executable = 'cmd.exe';
+      args = ['/c', command];
+    } else {
+      // PsExec execution for remote machines
+      executable = 'psexec.exe'; // Explicitly looking for the .exe
+      
+      // Target host
+      args.push(`\\\\${host}`);
+
+      // Credentials
+      if (username) args.push('-u', username);
+      if (password) args.push('-p', password);
+
+      // PsExec Flags
+      // -c: copy script (used for .bat files)
+      // -accepteula: non-interactive EULA acceptance
+      // -nobanner: cleaner output
+      args.push('-accepteula', '-nobanner');
+
+      if (isScript) {
+        args.push('-c', command); // command is the local path to the script
+      } else {
+        // cmd /c allows executing arbitrary shell commands remotely
+        args.push('cmd', '/c', command);
+      }
     }
 
-    const args = [`\\\\${host}`];
-    
-    if (username) args.push('-u', username);
-    if (password) args.push('-p', password);
-    
-    args.push('-accepteula', '-nobanner');
-    
-    if (isScript && scriptPath) {
-      args.push('-c', scriptPath);
-    } else if (command) {
-      // cmd /c garante que o comando seja interpretado corretamente pelo ambiente Windows remoto
-      args.push('cmd', '/c', command);
-    }
+    console.log(`[EXEC] Running: ${executable} ${args.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
 
-    console.log(`[EXEC_WIN_SPAWN] Comando: psexec ${args.join(' ')}`);
-
-    const child = spawn('psexec', args, {
+    const child = spawn(executable, args, {
       shell: true,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      windowsHide: true,
     });
 
     let stdout = '';
     let stderr = '';
 
     child.stdout.on('data', (data) => {
-      const chunk = data.toString();
-      stdout += chunk;
+      stdout += data.toString();
     });
 
     child.stderr.on('data', (data) => {
-      const chunk = data.toString();
-      stderr += chunk;
+      stderr += data.toString();
     });
 
-    // Timeout de segurança
-    const timeout = setTimeout(() => {
+    // Timeout: 2 minutes for scripts, 30s for commands
+    const timeoutDuration = isScript ? 120000 : 45000;
+    const timer = setTimeout(() => {
       child.kill();
-      reject(new Error('Tempo limite de execução excedido (PsExec)'));
-    }, 60000);
+      reject(new Error(`Timeout na execução remota (${timeoutDuration / 1000}s)`));
+    }, timeoutDuration);
 
     child.on('close', (code) => {
-      clearTimeout(timeout);
+      clearTimeout(timer);
       resolve({ stdout, stderr, exitCode: code });
     });
 
     child.on('error', (err) => {
-      clearTimeout(timeout);
+      clearTimeout(timer);
       reject(err);
     });
   });
+}
+
+/**
+ * Filters out PsExec internal messages to show only relevant output.
+ */
+function formatOutput(stdout: string, stderr: string): string {
+  const combined = (stdout + '\n' + stderr).trim();
+  if (!combined) return 'Sem dados de saída do console.';
+
+  return combined.split('\n')
+    .filter(line => {
+      const l = line.trim().toLowerCase();
+      if (!l) return false;
+      // Filter common PsExec noise
+      if (l.includes('psexec v')) return false;
+      if (l.includes('sysinternals')) return false;
+      if (l.includes('copyright')) return false;
+      if (l.includes('starting psexec service')) return false;
+      if (l.includes('connecting to')) return false;
+      if (l.includes('connected to')) return false;
+      
+      // Filter windows command prompts
+      if (/^[a-z]:\\.*>$/i.test(l)) return false;
+      
+      return true;
+    })
+    .join('\n')
+    .trim() || combined; // Fallback to raw if filtering result is empty
 }
 
 async function startServer() {
@@ -125,10 +159,9 @@ async function startServer() {
   app.use(cors());
   app.use(bodyParser.json());
 
-  // --- Persistent Storage API ---
+  // --- Persistence Routes ---
   app.get('/api/data', async (req, res) => {
-    const db = await readDb();
-    res.json(db);
+    res.json(await readDb());
   });
 
   app.post('/api/machines', async (req, res) => {
@@ -147,197 +180,132 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // Verificação de conectividade (usando porta 445/SMB em vez de ICMP)
+  // --- Network Utilities ---
   app.post('/api/ping', async (req, res) => {
     const { hosts } = req.body;
-    if (!Array.isArray(hosts)) return res.status(400).json({ error: 'Hosts em formato inválido' });
-    
-    try {
-      const results = await Promise.all(
-        hosts.map(async (host) => {
-          return new Promise((resolve) => {
-            const socket = new net.Socket();
-            const timeout = 2500;
-            let alive = false;
+    if (!Array.isArray(hosts)) return res.status(400).json({ error: 'Array de hosts obrigatório' });
 
-            socket.setTimeout(timeout);
-            socket.on('connect', () => {
-              alive = true;
-              socket.destroy();
-            });
-            socket.on('timeout', () => {
-              socket.destroy();
-            });
-            socket.on('error', () => {
-              socket.destroy();
-            });
-            socket.on('close', () => {
-              resolve({ host, alive, time: alive ? 'OK' : 'FAIL' });
-            });
+    const results = await Promise.all(hosts.map(async (host) => {
+      return new Promise((resolve) => {
+        const socket = new net.Socket();
+        socket.setTimeout(2000);
+        
+        socket.on('connect', () => {
+          socket.destroy();
+          resolve({ host, alive: true });
+        });
+        
+        socket.on('timeout', () => {
+          socket.destroy();
+          resolve({ host, alive: false });
+        });
+        
+        socket.on('error', () => {
+          socket.destroy();
+          resolve({ host, alive: false });
+        });
 
-            socket.connect(445, host);
-          });
-        })
-      );
-      res.json(results);
-    } catch (e) { 
-      console.error('Erro no check de rede:', e);
-      res.status(500).json({ error: 'Falha na verificação de rede' }); 
-    }
+        // Use SMB port 445 for Windows machine discovery
+        socket.connect(445, host);
+      });
+    }));
+
+    res.json(results);
   });
 
   // --- Scripts Management ---
-  const SCRIPTS_DIR = path.join(process.cwd(), 'scripts');
-  if (!fs.existsSync(SCRIPTS_DIR)) {
-    fs.mkdirSync(SCRIPTS_DIR);
-  }
-
-  app.get('/api/scripts', (req, res) => {
+  app.get('/api/scripts', async (req, res) => {
     try {
-      const files = fs.readdirSync(SCRIPTS_DIR).filter(f => f.endsWith('.bat'));
-      res.json({ scripts: files });
-    } catch (err) {
-      res.status(500).json({ error: 'Erro ao listar scripts' });
+      const files = await fsp.readdir(SCRIPTS_DIR);
+      res.json({ scripts: files.filter(f => f.endsWith('.bat')) });
+    } catch (e) {
+      res.status(500).json({ error: 'Falha ao listar scripts' });
     }
   });
 
-  app.post('/api/scripts/upload', express.text({ limit: '1mb' }), (req, res) => {
+  app.post('/api/scripts/upload', express.text({ limit: '1mb' }), async (req, res) => {
     const { name } = req.query;
-    if (!name || typeof name !== 'string' || !name.endsWith('.bat')) {
-      return res.status(400).json({ error: 'Nome de arquivo inválido. Deve ser .bat' });
-    }
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'Nome de arquivo inválido' });
+    
+    const fileName = name.endsWith('.bat') ? name : `${name}.bat`;
     try {
-      fs.writeFileSync(path.join(SCRIPTS_DIR, name), req.body);
+      await fsp.writeFile(path.join(SCRIPTS_DIR, fileName), req.body);
       res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: 'Erro ao salvar script' });
+    } catch (e) {
+      res.status(500).json({ error: 'Falha ao salvar script' });
     }
   });
 
-  app.delete('/api/scripts/:name', (req, res) => {
+  app.delete('/api/scripts/:name', async (req, res) => {
     try {
-      const filePath = path.join(SCRIPTS_DIR, req.params.name);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        res.json({ success: true });
-      } else {
-        res.status(404).json({ error: 'Arquivo não encontrado' });
-      }
-    } catch (err) {
-      res.status(500).json({ error: 'Erro ao deletar script' });
+      await fsp.unlink(path.join(SCRIPTS_DIR, req.params.name));
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: 'Falha ao remover script' });
     }
   });
 
+  // --- Execution Routes ---
   app.post('/api/exec-script', async (req, res) => {
     const { host, scriptName } = req.body;
     const db = await readDb();
-    const creds = db.credentials;
-    
-    if (!creds || !creds.username || !creds.password) {
-      return res.status(400).json({ error: 'Credenciais não configuradas' });
-    }
+    const { username, password } = db.credentials;
+
+    if (!username || !password) return res.status(400).json({ error: 'Credenciais não configuradas' });
 
     const scriptPath = path.join(SCRIPTS_DIR, scriptName);
-    if (!fs.existsSync(scriptPath)) {
-      return res.status(404).json({ error: 'Script não encontrado no servidor' });
-    }
+    if (!fs.existsSync(scriptPath)) return res.status(404).json({ error: 'Script não encontrado' });
 
     try {
-      const { username, password } = creds;
-      const result = await execWin({
+      const result = await winExecute({
         host,
+        command: scriptPath,
         username,
         password,
-        isScript: true,
-        scriptPath
+        isScript: true
       });
-      
-      const output = cleanOutput(result.stdout + result.stderr);
-      res.json({ output: output || 'Script executado com sucesso.' });
+      res.json({ output: formatOutput(result.stdout, result.stderr) });
     } catch (err: any) {
-      res.status(500).json({ error: cleanOutput(err.message || 'Erro ao executar script') });
+      res.status(500).json({ error: err.message || 'Erro na execução do script' });
     }
   });
 
   app.post('/api/shell', async (req, res) => {
     const { host, command } = req.body;
     const db = await readDb();
-    const creds = db.credentials;
+    const { username, password } = db.credentials;
 
-    if (!creds || !creds.username || !creds.password) {
-      return res.status(400).json({ error: 'Credenciais globais não configuradas' });
-    }
+    if (!username || !password) return res.status(400).json({ error: 'Credenciais não configuradas' });
 
     try {
-      const result = await execWin({
-        host,
-        command,
-        username: creds.username,
-        password: creds.password
-      });
-
-      const rawOutput = result.stdout + result.stderr;
-      const output = cleanOutput(rawOutput) || 'Comando executado.';
-
-      res.json({ output });
+      const result = await winExecute({ host, command, username, password });
+      res.json({ output: formatOutput(result.stdout, result.stderr) });
     } catch (err: any) {
-      res.status(500).json({ error: cleanOutput(err.message || 'Erro na conexão PsExec') });
+      res.status(500).json({ error: err.message || 'Falha na conexão remota' });
     }
   });
 
   app.post('/api/exec', async (req, res) => {
     const { hosts, command, username, password } = req.body;
     if (!hosts || !command) return res.status(400).json({ error: 'Dados incompletos' });
-    
+
     try {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
-          const result = await execWin({
-            host,
-            command,
-            username,
-            password
-          });
-          
-          const rawOutput = result.stdout + result.stderr;
-          const cleaned = cleanOutput(rawOutput);
-          
-          return { host, status: 'success', output: cleaned || 'Executado com sucesso.' };
+          const result = await winExecute({ host, command, username, password });
+          return { host, status: 'success', output: formatOutput(result.stdout, result.stderr) };
         } catch (err: any) {
-          return { 
-            host, 
-            status: 'failed', 
-            output: `Erro de execução:\n${cleanOutput(err.message || 'Falha no processo')}`
-          };
+          return { host, status: 'failed', output: err.message || 'Erro de execução' };
         }
       }));
       res.json({ results });
     } catch (err) {
-      console.error('Erro na API de exec:', err);
-      res.status(500).json({ error: 'Erro interno no servidor' });
+      res.status(500).json({ error: 'Erro interno no processamento em massa' });
     }
   });
 
-  // Helper para limpar logs de header de ferramentas como PsExec
-  function cleanOutput(raw: string): string {
-    return raw.split('\n').filter(line => {
-      const l = line.trim();
-      if (!l) return false;
-      if (l.includes('PsExec v')) return false;
-      if (l.includes('Sysinternals - www.sysinternals.com')) return false;
-      if (l.includes('Copyright (C)')) return false;
-      if (l.includes('Starting PsExec service on')) return false;
-      if (l.includes('Connecting with Sysinternals Svc on')) return false;
-      
-      // Prompt removal
-      if (/^[a-zA-Z]:\\.*>/.test(l)) return false;
-      return true;
-    }).join('\n').trim();
-  }
-
-  // Vite integration
+  // --- Web Serving ---
   if (process.env.NODE_ENV !== 'production') {
-    console.log('Iniciando middleware do Vite...');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -352,10 +320,10 @@ async function startServer() {
   }
 
   app.listen(port, '0.0.0.0', () => {
-    console.log(`>>> Servidor PC_MANAGER rodando em http://0.0.0.0:${port}`);
+    console.log(`[READY] Servidor PC_MANAGER rodando em http://0.0.0.0:${port}`);
   });
 }
 
-startServer().catch((err) => {
-  console.error('ERRO CRÍTICO AO INICIAR SERVIDOR:', err);
+startServer().catch(err => {
+  console.error('[FATAL] Erro ao iniciar servidor:', err);
 });
