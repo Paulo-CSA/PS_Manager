@@ -48,41 +48,6 @@ async function writeDb(data: any) {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Robust execution using local file redirection to ensure 100% output capture.
- */
-function runWithLocalRedirection(fullCmd: string): Promise<{ out: string; err: string; code: number | null }> {
-  return new Promise((resolve) => {
-    const tempFile = path.join(os.tmpdir(), `psexec_out_${Date.now()}_${Math.floor(Math.random() * 1000)}.txt`);
-    const cmdWithRedir = `(${fullCmd}) > "${tempFile}" 2>&1`;
-    
-    console.log(`[EXEC_REDIR] ${cmdWithRedir}`);
-
-    exec(cmdWithRedir, { windowsHide: true, timeout: 300000 }, (error) => {
-      let output = '';
-      let code = error ? (error.code || 1) : 0;
-
-      try {
-        if (fs.existsSync(tempFile)) {
-          const raw = fs.readFileSync(tempFile);
-          output = iconv.decode(raw, 'cp850');
-          if (!output.trim() && raw.length > 0) output = iconv.decode(raw, 'utf-8');
-          output = output.replace(/\0/g, ''); // Fix null bytes
-          fs.unlinkSync(tempFile); // Cleanup
-        }
-      } catch (e) {
-        console.error("Error reading temp file:", e);
-      }
-
-      resolve({
-        out: output,
-        err: '',
-        code
-      });
-    });
-  });
-}
-
-/**
  * Robust execution engine for Windows.
  * Handles PsExec and direct CMD execution.
  */
@@ -96,28 +61,122 @@ async function winExecute(options: {
   const { host, command, username, password, isScript } = options;
   const isLocal = host === 'localhost' || host === '127.0.0.1';
 
+  const runArgs = (executable: string, args: string[], capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
+    return new Promise((resolve, reject) => {
+      const child = spawn(executable, args, { 
+        shell: false, 
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let stdoutEnded = false;
+      let stderrEnded = false;
+      let processExited = false;
+      let exitCode: number | null = null;
+
+      const attemptResolve = () => {
+        if (processExited && stdoutEnded && stderrEnded) {
+          clearTimeout(timeout);
+          let out = '';
+          let err = '';
+
+          if (capture) {
+            const decodeBuffer = (buf: Buffer) => {
+              if (!buf || buf.length === 0) return '';
+              let decoded = iconv.decode(buf, 'cp850');
+              if (!decoded.trim() && buf.length > 0) decoded = iconv.decode(buf, 'utf-8');
+              return decoded.replace(/\0/g, ''); 
+            };
+            out = decodeBuffer(Buffer.concat(stdoutChunks));
+            err = decodeBuffer(Buffer.concat(stderrChunks));
+          }
+          resolve({ out, err, code: exitCode });
+        }
+      };
+      
+      const timeout = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`Timeout na execução (${executable})`));
+      }, 300000);
+
+      if (capture) {
+        child.stdout.on('data', (d) => stdoutChunks.push(d));
+        child.stdout.on('end', () => { stdoutEnded = true; attemptResolve(); });
+        child.stderr.on('data', (d) => stderrChunks.push(d));
+        child.stderr.on('end', () => { stderrEnded = true; attemptResolve(); });
+      } else {
+        stdoutEnded = true;
+        stderrEnded = true;
+      }
+
+      child.on('close', (code) => {
+        exitCode = code;
+        processExited = true;
+        attemptResolve();
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+  };
+
   if (isLocal) {
-    console.log(`[EXEC] Local | Command: ${command}`);
-    const res = await runWithLocalRedirection(`cmd /c "${command}"`);
+    const res = await runArgs('cmd.exe', ['/c', command], true);
     return { stdout: res.out, stderr: res.err, exitCode: res.code };
   }
 
   const psexec = 'psexec.exe';
-  const authStr = `${username ? `-u "${username}"` : ''} ${password ? `-p "${password}"` : ''}`;
-  const baseAuth = `${psexec} \\\\${host} ${authStr} -accepteula -nobanner -h`;
+  const authArgs = [];
+  if (username) authArgs.push('-u', username);
+  if (password) authArgs.push('-p', password);
+  const baseArgs = [`\\\\${host}`, ...authArgs, '-accepteula', '-nobanner', '-h'];
 
   try {
-    const fullCmd = isScript ? `${baseAuth} -c "${command}"` : `${baseAuth} cmd /c "${command}"`;
-    const res = await runWithLocalRedirection(fullCmd);
-    
-    // PsExec cleanup
-    const cleanStdout = res.out.replace(/PsExec v.*?\n/gi, '')
-                               .replace(/Copyright.*?\n/gi, '')
-                               .replace(/Starting.*?on.*?\.\.\./gi, '')
-                               .replace(/.*?exited on.*?with error code.*?\./gi, '')
-                               .trim();
+    if (isScript) {
+      const res = await runArgs(psexec, [...baseArgs, '-c', command], true);
+      return { stdout: res.out, stderr: res.err, exitCode: res.code };
+    } else {
+      const uniqueId = Math.floor(Math.random() * 100000);
+      const remoteFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
+      const smbPath = `\\\\${host}\\C$\\Windows\\Temp\\out_${uniqueId}.txt`;
 
-    return { stdout: cleanStdout || res.out, stderr: res.err, exitCode: res.code };
+      // 1. EXECUTE AND REDIRECT ON REMOTE
+      console.log(`[EXEC] ${host} [STAGE 1] Redirecting to ${remoteFile}`);
+      await runArgs(psexec, [...baseArgs, 'cmd', '/c', `(${command}) > ${remoteFile} 2>&1`], false);
+
+      await sleep(3000); // Wait for flush
+
+      // 2. READ OUTPUT
+      let finalOutput = '';
+      
+      try {
+        // Method A: Direct SMB Core access (Most robust for large data)
+        if (fs.existsSync(smbPath)) {
+          const buf = fs.readFileSync(smbPath);
+          finalOutput = iconv.decode(buf, 'cp850');
+          if (!finalOutput.trim() && buf.length > 0) finalOutput = iconv.decode(buf, 'utf-8');
+        } else {
+          // Method B: PowerShell direct read fallback
+          const readRes = await runArgs(psexec, [...baseArgs, 'powershell', '-NoProfile', '-Command', `[IO.File]::ReadAllText('${remoteFile}')`], true);
+          finalOutput = readRes.out;
+        }
+      } catch (readErr) {
+        // Method C: Last resort CMD type
+        const readRes = await runArgs(psexec, [...baseArgs, 'cmd', '/c', `type ${remoteFile}`], true);
+        finalOutput = readRes.out;
+      }
+
+      console.log(`[EXEC] ${host} Completed. Length: ${finalOutput.length}`);
+
+      // 3. CLEANUP (Async)
+      spawn(psexec, [...baseArgs, 'cmd', '/c', `del /f /q ${remoteFile}`], { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
+
+      return { stdout: finalOutput.replace(/\0/g, ''), stderr: '', exitCode: 0 };
+    }
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
     return { stdout: '', stderr: err.message, exitCode: 1 };
