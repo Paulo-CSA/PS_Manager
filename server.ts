@@ -60,53 +60,37 @@ async function winExecute(options: {
   return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
     const isLocal = host === 'localhost' || host === '127.0.0.1';
     
-    let executable = '';
-    let args: string[] = [];
+    let fullExecutionCommand = '';
     let thisCleanup: (() => void) | null = null;
 
     if (isLocal) {
-      executable = 'cmd.exe';
-      args = ['/c', command];
+      fullExecutionCommand = `cmd /c "${command}"`;
     } else {
-      // Use 'psexec.exe' directly so it can be found in the PATH if not in root
-      executable = 'psexec.exe'; 
-      args.push(`\\\\${host}`);
-      if (username) args.push('-u', username);
-      if (password) args.push('-p', password);
-      args.push('-accepteula', '-nobanner', '-h');
+      const psexec = 'psexec.exe';
+      const auth = `${username ? `-u "${username}"` : ''} ${password ? `-p "${password}"` : ''}`;
 
       if (isScript) {
-        args.push('-c', command);
+        // -c actually copies the file to the remote machine
+        fullExecutionCommand = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h -c "${command}"`;
       } else {
-        // Unique remote capture file for each execution
         const uniqueId = Math.floor(Math.random() * 100000);
         const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
+        const captureLogic = `(${command}) ^> ${remoteOutFile} 2^>^&1 ^& type ${remoteOutFile}`;
         
-        // Step 1: Execute, redirect, and type for capture
-        // Format: cmd /c "(command) > file 2>&1 & type file"
-        const captureCommand = `cmd /c "(${command}) > ${remoteOutFile} 2>&1 & type ${remoteOutFile}"`;
-        args.push('cmd', '/c', captureCommand);
-
-        // Setup cleanup process to run AFTER capture
-        const cleanupArgs = [
-          `\\\\${host}`,
-          '-u', username || '',
-          '-p', password || '',
-          '-accepteula', '-nobanner', '-h',
-          'cmd', '/c', `timeout /t 10 /nobreak >nul & del /f /q ${remoteOutFile}`
-        ].filter(v => v !== '');
+        fullExecutionCommand = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h cmd /c ${captureLogic}`;
 
         thisCleanup = () => {
+          const cleanupCmd = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h cmd /c timeout /t 10 /nobreak ^>nul ^& del /f /q ${remoteOutFile}`;
           console.log(`[CLEANUP] Iniciando limpeza em ${host}: ${remoteOutFile}`);
-          spawn(executable, cleanupArgs, { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
+          spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
         };
       }
     }
 
-    console.log(`[EXEC] ${host} | Executing: ${executable} ${args.join(' ')}`);
+    console.log(`[EXEC] ${host} | Executing: ${fullExecutionCommand}`);
 
-    const child = spawn(executable, args, {
-      shell: false,
+    const child = spawn(fullExecutionCommand, [], {
+      shell: true,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     });
