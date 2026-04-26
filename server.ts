@@ -71,26 +71,43 @@ async function winExecute(options: {
       
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
+      let stdoutEnded = false;
+      let stderrEnded = false;
+      let exitCode: number | null = null;
+      let processClosed = false;
 
-      child.stdout.on('data', (d) => {
-        if (capture) stdoutChunks.push(d);
-      });
-      child.stderr.on('data', (d) => {
-        if (capture) stderrChunks.push(d);
-      });
+      const checkResolved = () => {
+        if (processClosed && stdoutEnded && stderrEnded) {
+          let out = '';
+          if (capture) {
+            const combined = Buffer.concat([...stdoutChunks, ...stderrChunks]);
+            out = iconv.decode(combined, 'cp850');
+            if (!out.trim() && combined.length > 0) {
+              out = iconv.decode(combined, 'utf-8');
+            }
+          }
+          resolve({ out, code: exitCode });
+        }
+      };
+
+      child.stdout.on('data', (d) => { if (capture) stdoutChunks.push(d); });
+      child.stdout.on('end', () => { stdoutEnded = true; checkResolved(); });
+
+      child.stderr.on('data', (d) => { if (capture) stderrChunks.push(d); });
+      child.stderr.on('end', () => { stderrEnded = true; checkResolved(); });
 
       child.on('close', (code) => {
-        let out = '';
-        if (capture) {
-          const combined = Buffer.concat([...stdoutChunks, ...stderrChunks]);
-          out = iconv.decode(combined, 'cp850');
-          if (!out.trim() && combined.length > 0) {
-            out = iconv.decode(combined, 'utf-8');
-          }
-        }
-        resolve({ out, code });
+        exitCode = code;
+        processClosed = true;
+        checkResolved();
       });
-      child.on('error', reject);
+
+      child.on('error', (err) => {
+        processClosed = true;
+        stdoutEnded = true;
+        stderrEnded = true;
+        reject(err);
+      });
     });
   };
 
@@ -120,8 +137,8 @@ async function winExecute(options: {
       const createCmd = `${baseAuth} cmd /c "(${command}) > ${remoteOutFile} 2>&1"`;
       await runSingle(createCmd, false);
 
-      // Give Windows a moment to flush the file to disk and release locks
-      await sleep(1500);
+      // Give Windows more time to flush the file to disk and release locks
+      await sleep(3000);
 
       // 2. READ FILE
       console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
