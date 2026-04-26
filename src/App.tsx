@@ -279,6 +279,7 @@ const App = () => {
   const saveCreds = () => {
     // Already saved via useEffect
     setLog(prev => [...prev, `[SYSTEM] Credenciais salvas localmente.`]);
+    setActiveTab('dashboard');
   };
 
   const runPing = async () => {
