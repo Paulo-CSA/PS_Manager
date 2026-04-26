@@ -46,29 +46,24 @@ const App = () => {
   const [isIPModalOpen, setIsIPModalOpen] = useState(false);
   const [isAppModalOpen, setIsAppModalOpen] = useState(false);
   const [isWaitModalOpen, setIsWaitModalOpen] = useState(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isScriptManagerOpen, setIsScriptManagerOpen] = useState(false);
   const [isRunScriptModalOpen, setIsRunScriptModalOpen] = useState(false);
   const [scripts, setScripts] = useState<string[]>([]);
   const [scriptToRun, setScriptToRun] = useState<string | null>(null);
   const [scriptTargetHosts, setScriptTargetHosts] = useState<string[]>([]);
   
-  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [terminalHost, setTerminalHost] = useState<string | null>(null);
   const [terminalLog, setTerminalLog] = useState<{ type: 'in' | 'out', text: string }[]>([]);
   const [terminalLoading, setTerminalLoading] = useState(false);
   
   const terminalEndRef = useRef<HTMLDivElement>(null);
-  const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isTerminalOpen) {
       terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [terminalLog, isTerminalOpen]);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [log]);
 
   // Forms
   const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
@@ -336,12 +331,6 @@ const App = () => {
       
       results.forEach((r: any) => {
         setLog(prev => [...prev, `[${r.host}] ${r.status.toUpperCase()}: ${r.output}`]);
-        // Salva debug do último resultado no servidor
-        fetch('/api/save-debug', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: r.output })
-        }).catch(() => {});
       });
       return results;
     } catch (err) {
@@ -359,15 +348,21 @@ const App = () => {
     setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos em ${host}...`]);
     setIsWaitModalOpen(true);
     
-    // Comando PowerShell mais abrangente para listar apps
-    const listCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName | Sort-Object"`;
-    const results = await executeRemote(listCmd, [host]);
+    // Comando PowerShell otimizado conforme sugestão do usuário
+    const results = await executeRemote(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName } | Select-Object -ExpandProperty DisplayName"`, [host]);
     setIsWaitModalOpen(false);
 
     if (results && results[0]) {
       const apps = results[0].output.split('\n')
         .map((a: string) => a.trim())
-        .filter((a: string) => a.length > 0);
+        .filter((a: string) => 
+          a && 
+          !a.includes('Name') && 
+          !a.includes('----') &&
+          !a.includes('[') &&
+          !a.startsWith('Success') &&
+          !a.includes('PsExec')
+        );
       setInstalledApps(Array.from(new Set(apps)).sort());
       setIsAppModalOpen(true);
     }
@@ -384,7 +379,7 @@ const App = () => {
 
   const openTerminal = (host: string) => {
     setTerminalHost(host);
-    setTerminalLog([{ type: 'out', text: `Conectando ao terminal de ${host}...` }]);
+    setTerminalLog([{ type: 'out', text: `Conectando ao terminal WMI de ${host}...` }]);
     setIsTerminalOpen(true);
   };
 
@@ -404,12 +399,6 @@ const App = () => {
       
       if (res.ok) {
         setTerminalLog(prev => [...prev, { type: 'out', text: data.output }]);
-        // Debug save
-        fetch('/api/save-debug', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: data.output })
-        }).catch(() => {});
       } else {
         setTerminalLog(prev => [...prev, { type: 'out', text: `ERRO: ${data.error}` }]);
       }
@@ -760,25 +749,15 @@ const App = () => {
                   <Terminal size={14} className="text-gray-500" />
                   <span className="text-[10px] font-mono uppercase text-gray-500 tracking-widest">Saída do Console</span>
                 </div>
-                <div className="flex-1 overflow-y-auto font-mono text-[11px] space-y-4 text-[#E4E3E0] p-4 custom-scrollbar bg-black/20">
-                  {log.map((line, i) => {
-                    const isCmd = line.startsWith('[CMD]');
-                    const isError = line.startsWith('[ERROR]');
-                    const isSuccess = line.includes('SUCCESS');
-                    
-                    return (
-                      <div key={i} className="flex gap-4 group border-b border-white/5 pb-4 last:border-0">
-                        <span className="opacity-10 select-none text-[9px] shrink-0 w-6 text-right mt-1 font-sans">{i + 1}</span>
-                        <div className={`flex-1 overflow-x-auto custom-scrollbar ${isCmd ? 'text-blue-400 font-bold' : isError ? 'text-red-400' : isSuccess ? 'text-emerald-400' : ''}`}>
-                          <pre className="whitespace-pre-wrap font-mono leading-relaxed">
-                            {line}
-                          </pre>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {log.length === 0 && <div className="text-gray-700 italic h-full flex items-center justify-center font-sans tracking-wide">Console pronto para comandos remotas...</div>}
-                  <div ref={logEndRef} />
+                <div className="flex-1 overflow-y-auto font-mono text-xs space-y-1 text-blue-300/80 p-2">
+                  {log.map((line, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="opacity-30 select-none">{i + 1}</span>
+                      <span>{line}</span>
+                    </div>
+                  ))}
+                  {log.length === 0 && <span className="text-gray-700 italic">Pronto para execução...</span>}
+                  <div id="anchor" />
                 </div>
               </div>
             </>
@@ -988,19 +967,18 @@ const App = () => {
 
               {/* Action output area */}
               {(execResult || execLoading) && (
-                <div className="bg-black/50 border border-white/5 rounded-xl p-4 mb-6 max-h-96 overflow-y-auto custom-scrollbar font-mono text-[11px]">
+                <div className="bg-black/50 border border-white/5 rounded-xl p-4 mb-6 max-h-64 overflow-y-auto custom-scrollbar font-mono text-[11px]">
                   {execLoading ? (
                     <div className="flex items-center gap-2 text-blue-400 animate-pulse">
                       <RefreshCw size={10} className="animate-spin" />
                       <span>EXECUTANDO COMANDO...</span>
                     </div>
                   ) : execResult?.map((r, i) => (
-                    <div key={i} className="mb-4 last:mb-0 border-b border-white/5 pb-4 last:border-0 last:pb-0">
-                      <div className={`font-bold flex items-center justify-between ${r.status === 'success' ? 'text-emerald-500' : 'text-red-500'}`}>
-                        <span>[{r.host}] {r.status.toUpperCase()}</span>
-                        <span className="text-[9px] opacity-30">PID: {Math.floor(Math.random() * 9000) + 1000}</span>
+                    <div key={i} className="mb-2 last:mb-0">
+                      <div className={`font-bold ${r.status === 'success' ? 'text-emerald-500' : 'text-red-500'}`}>
+                        [{r.host}] {r.status.toUpperCase()}
                       </div>
-                      <pre className="text-gray-300 whitespace-pre-wrap mt-2 leading-relaxed">{r.output || 'Sem saída de console.'}</pre>
+                      <pre className="text-gray-400 whitespace-pre-wrap break-all mt-1">{r.output || 'Sem saída.'}</pre>
                     </div>
                   ))}
                 </div>
@@ -1145,11 +1123,9 @@ const App = () => {
                   Cancelar
                 </button>
                 <button 
-                  onClick={async () => {
+                  onClick={() => {
                     const cmd = `netsh interface ip set address name="Ethernet" static ${ipConfig.ip} ${ipConfig.mask} ${ipConfig.gw}`;
-                    setIsWaitModalOpen(true);
-                    await executeRemote(cmd);
-                    setIsWaitModalOpen(false);
+                    executeRemote(cmd);
                     setIsIPModalOpen(false);
                   }}
                   className="flex-1 py-3 bg-blue-600 text-white rounded-xl text-sm font-bold transition-all"
@@ -1313,7 +1289,7 @@ const App = () => {
         )}
       </AnimatePresence>
 
-      {/* Terminal Modal */}
+      {/* Terminal WMI Modal */}
       <AnimatePresence>
         {isTerminalOpen && (
           <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
@@ -1330,7 +1306,7 @@ const App = () => {
                     <Cpu className="text-amber-500" size={20} />
                   </div>
                   <div>
-                    <h3 className="font-bold text-sm">Shell Remoto (PsExec)</h3>
+                    <h3 className="font-bold text-sm">Shell Interativo (WMI)</h3>
                     <p className="text-[10px] text-gray-500 font-mono tracking-tighter uppercase">Conectado em: {terminalHost}</p>
                   </div>
                 </div>
@@ -1340,13 +1316,13 @@ const App = () => {
                     className="p-2 hover:bg-white/5 rounded-lg transition-all text-gray-500 hover:text-white"
                     title="Limpar Terminal"
                   >
-                    <Trash size={18} />
+                    <Trash2 size={16} />
                   </button>
                   <button 
                     onClick={() => setIsTerminalOpen(false)}
-                    className="p-2 hover:bg-white/5 rounded-lg transition-all"
+                    className="p-2 hover:bg-white/5 rounded-full transition-all"
                   >
-                    <Plus className="rotate-45" size={20} />
+                    <XCircle size={22} className="text-gray-500 hover:text-red-500" />
                   </button>
                 </div>
               </div>
