@@ -11,6 +11,7 @@ import fsp from 'fs/promises';
 import { spawn, execFile, exec } from 'child_process';
 import iconv from 'iconv-lite';
 import { Buffer } from 'buffer';
+import { getRemoteSoftware, uninstallRemoteSoftware } from './softwareManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -190,68 +191,6 @@ function formatOutput(stdout: string, stderr: string): string {
   const combined = (stdout + '\n' + stderr).trim();
   if (!combined) return 'Vazio (nenhum dado retornado do console).';
   return combined;
-}
-
-// --- Software Management (Isolated) ---
-const SOFTWARE_REGISTRY_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue | Where-Object { ($_.Publisher -notmatch 'Microsoft') -and ($_.DisplayName -notmatch 'Microsoft') -and ($_.DisplayName -ne $null) } | Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}} | Sort-Object Name | ConvertTo-Json -Compress"`;
-
-async function getRemoteSoftware(host: string, user?: string, pass?: string): Promise<any[]> {
-  try {
-    console.log(`[SOFTWARE_QUERY] ${host}`);
-    const result = await winExecute({ 
-      host, 
-      command: SOFTWARE_REGISTRY_COMMAND, 
-      username: user, 
-      password: pass 
-    });
-    
-    const raw = result.stdout;
-    let jsonStr = '';
-    const startIndex = raw.indexOf('[');
-    const lastIndex = raw.lastIndexOf(']');
-    
-    if (startIndex !== -1 && lastIndex !== -1 && lastIndex > startIndex) {
-      jsonStr = raw.substring(startIndex, lastIndex + 1);
-    } else {
-      // Fallback for single object if array wasn't returned
-      const objStart = raw.indexOf('{');
-      const objEnd = raw.lastIndexOf('}');
-      if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
-        jsonStr = raw.substring(objStart, objEnd + 1);
-      }
-    }
-
-    if (!jsonStr.trim()) {
-      console.log(`[SOFTWARE_QUERY] No valid JSON found in output for ${host}`);
-      return [];
-    }
-
-    const data = JSON.parse(jsonStr);
-    const finalData = Array.isArray(data) ? data : [data];
-    console.log(`[SOFTWARE_QUERY] Found ${finalData.length} apps for ${host}`);
-    return finalData;
-  } catch (e) {
-    console.error(`[SOFTWARE_ERROR] ${host}:`, e);
-    return [];
-  }
-}
-
-async function uninstallRemoteSoftware(host: string, appName: string, user?: string, pass?: string): Promise<boolean> {
-  const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*') -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '${appName}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace 'msiexec.exe?\\s*/[iI]', 'msiexec.exe /x'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
-
-  try {
-    console.log(`[SOFTWARE_UNINSTALL] ${appName} on ${host}`);
-    const result = await winExecute({ 
-      host, 
-      command: uninstallCmd, 
-      username: user, 
-      password: pass 
-    });
-    return result.exitCode === 0;
-  } catch (err) {
-    console.error(`[UNINSTALL_ERROR] ${host}:`, err);
-    return false;
-  }
 }
 
 async function startServer() {
