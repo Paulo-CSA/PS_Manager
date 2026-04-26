@@ -85,71 +85,66 @@ export async function getRemoteSoftware(host: string, user?: string, pass?: stri
 export async function uninstallRemoteSoftware(host: string, appName: string, user?: string, pass?: string): Promise<boolean> {
   const uninstallScript = `
 $appName = "${appName}"
+
 $paths = @(
-    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
-    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+ 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+ 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
 
-$app = Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq $appName } | Select-Object -First 1
+$app = Get-ItemProperty $paths -ErrorAction SilentlyContinue |
+Where-Object { $_.DisplayName -like "*$appName*" } |
+Select-Object -First 1
 
 if (-not $app) {
     Write-Error "Aplicativo não encontrado"
     exit 1
 }
 
-$uninstallString = $app.UninstallString
-if (-not $uninstallString) {
-    Write-Error "Nenhuma string de desinstalação encontrada"
+Write-Host "Encontrado: $($app.DisplayName)"
+
+$cmd = $app.QuietUninstallString
+if (-not $cmd) { $cmd = $app.UninstallString }
+
+if (-not $cmd) {
+    Write-Error "Sem comando de desinstalação"
     exit 1
 }
 
-Write-Host "Desinstalando: $($app.DisplayName)"
-Write-Host "Comando original: $uninstallString"
+Write-Host "Comando: $cmd"
 
-if ($uninstallString -like "*msiexec.exe*") {
-    # Para MSI, garante que use /x e adiciona /quiet /norestart
-    $guid = if ($uninstallString -match '{[A-Z0-9-]+}') { $matches[0] } else { $uninstallString }
-    $cmd = "msiexec.exe /x $guid /quiet /norestart"
-    Write-Host "Executando MSI: $cmd"
-    Start-Process msiexec.exe -ArgumentList "/x", "$guid", "/quiet", "/norestart" -Wait
+# --- MSI ---
+if ($cmd -match "msiexec") {
+    if ($cmd -match "{[A-Z0-9-]+}") {
+        $guid = $matches[0]
+        Write-Host "MSI GUID: $guid"
+        Start-Process "msiexec.exe" -ArgumentList "/x $guid /quiet /norestart" -Wait
+    } else {
+        Write-Host "Executando MSI direto"
+        Start-Process "cmd.exe" -ArgumentList "/c $cmd /quiet /norestart" -Wait
+    }
 }
 else {
-    # Para executáveis (EXE), tenta identificar flags silenciosas
-    $silentFlags = @("/S", "/s", "/silent", "/verysilent", "/quiet", "/qn", "-s", "-S", "-silent", "-quiet")
-    
-    # Limpa a string (remove aspas se for o caminho todo)
-    $exePath = ""
+    # --- EXE ROBUSTO ---
+    $exe = ""
     $args = ""
-    
-    if ($uninstallString -match '^\"([^\"]+)\" (.*)$') {
-        $exePath = $matches[1]
-        $args = $matches[2]
-    } elseif ($uninstallString -match '^([^ ]+) (.*)$') {
-        $exePath = $matches[1]
-        $args = $matches[2]
+
+    if ($cmd.StartsWith('"')) {
+        $exe = $cmd.Split('"')[1]
+        $args = $cmd.Substring($exe.Length + 2)
     } else {
-        $exePath = $uninstallString.Trim('\"')
+        $parts = $cmd.Split(" ",2)
+        $exe = $parts[0]
+        if ($parts.Length -gt 1) { $args = $parts[1] }
     }
 
-    # Verifica se já tem alguma flag silenciosa
-    $hasSilent = $false
-    foreach ($flag in $silentFlags) {
-        if ($args -like "*$flag*") {
-            $hasSilent = $true
-            break
-        }
-    }
+    Write-Host "EXE: $exe"
+    Write-Host "ARGS: $args"
 
-    if (-not $hasSilent) {
-        # Adiciona flags comuns de instalação silenciosa se não houver
-        # Tenta /S primeiro (comum em NSIS/Inno Setup)
-        $args += " /S /quiet /silent"
-    }
-
-    Write-Host "Executando EXE: $exePath $args"
-    Start-Process $exePath -ArgumentList $args -Wait -ErrorAction SilentlyContinue
+    # NÃO adiciona flags cegamente
+    Start-Process -FilePath $exe -ArgumentList $args -Wait -ErrorAction SilentlyContinue
 }
+
+Write-Host "Desinstalação finalizada"
 `;
 
   try {
