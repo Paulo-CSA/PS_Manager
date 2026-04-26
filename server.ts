@@ -74,46 +74,71 @@ async function winExecute(options: {
       
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
+      let stdoutEnded = false;
+      let stderrEnded = false;
+      let processExited = false;
+      let exitCode: number | null = null;
+
+      const attemptResolve = () => {
+        // Only resolve when process is closed AND both streams have ended
+        if (processExited && stdoutEnded && stderrEnded) {
+          clearTimeout(timeout);
+          let out = '';
+          let err = '';
+
+          if (capture) {
+            const decodeBuffer = (buf: Buffer) => {
+              if (!buf || buf.length === 0) return '';
+              // Detect UTF-16
+              if (buf.length >= 2 && ((buf[0] === 0xFF && buf[1] === 0xFE) || (buf[0] === 0xFE && buf[1] === 0xFF))) {
+                   return iconv.decode(buf, 'utf16');
+              }
+              // Standard CMD encoding
+              let decoded = iconv.decode(buf, 'cp850');
+              if (!decoded.trim() && buf.length > 0) {
+                decoded = iconv.decode(buf, 'utf-8');
+              }
+              return decoded.replace(/\0/g, ''); 
+            };
+
+            out = decodeBuffer(Buffer.concat(stdoutChunks));
+            err = decodeBuffer(Buffer.concat(stderrChunks));
+          }
+
+          resolve({ out, err, code: exitCode });
+        }
+      };
       
       const timeout = setTimeout(() => {
         child.kill('SIGKILL');
         reject(new Error(`Timeout na execução (${executable})`));
-      }, 240000);
+      }, 300000); // 5 minutes timeout
 
       if (capture) {
         child.stdout.on('data', (chunk: Buffer) => {
           stdoutChunks.push(chunk);
         });
+        child.stdout.on('end', () => {
+          stdoutEnded = true;
+          attemptResolve();
+        });
+
         child.stderr.on('data', (chunk: Buffer) => {
           stderrChunks.push(chunk);
         });
+        child.stderr.on('end', () => {
+          stderrEnded = true;
+          attemptResolve();
+        });
+      } else {
+        stdoutEnded = true;
+        stderrEnded = true;
       }
 
       child.on('close', (code) => {
-        clearTimeout(timeout);
-        let out = '';
-        let err = '';
-
-        if (capture) {
-          const decodeBuffer = (buf: Buffer) => {
-            if (!buf || buf.length === 0) return '';
-            // Detect UTF-16
-            if (buf.length >= 2 && ((buf[0] === 0xFF && buf[1] === 0xFE) || (buf[0] === 0xFE && buf[1] === 0xFF))) {
-                 return iconv.decode(buf, 'utf16');
-            }
-            // Standard CMD encoding
-            let decoded = iconv.decode(buf, 'cp850');
-            if (!decoded.trim() && buf.length > 0) {
-              decoded = iconv.decode(buf, 'utf-8');
-            }
-            return decoded.replace(/\0/g, ''); 
-          };
-
-          out = decodeBuffer(Buffer.concat(stdoutChunks));
-          err = decodeBuffer(Buffer.concat(stderrChunks));
-        }
-
-        resolve({ out, err, code });
+        exitCode = code;
+        processExited = true;
+        attemptResolve();
       });
 
       child.on('error', (err) => {
@@ -153,7 +178,7 @@ async function winExecute(options: {
       const createArgs = [...baseArgs, 'cmd', '/c', `(${command}) > ${remoteOutFile} 2>&1`].filter(v => v !== '');
       await runArgs(psexec, createArgs, false);
 
-      await sleep(7000);
+      await sleep(10000);
 
       // 2. READ FILE
       console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
