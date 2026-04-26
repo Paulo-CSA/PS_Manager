@@ -4,21 +4,32 @@ import { Buffer } from 'buffer';
 
 const SOFTWARE_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
+
 $paths = @(
     'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
-foreach ($path in $paths) {
-    $items = Get-ItemProperty $path
-    foreach ($item in $items) {
-        if ($item.DisplayName) {
-            $name = $item.DisplayName
-            $ver = if ($item.DisplayVersion) { $item.DisplayVersion } else { "---" }
-            $pub = if ($item.Publisher) { $item.Publisher } else { "---" }
-            Write-Host "$name###$ver###$pub"
-        }
-    }
+
+$apps = Get-ItemProperty $paths |
+Where-Object {
+    $_.DisplayName -and
+    $_.DisplayName -notmatch 'Update|Hotfix|Security|Microsoft Visual C\\+\\+'
+} |
+Select-Object @{
+    Name="Name"; Expression={$_.DisplayName}
+}, @{
+    Name="Version"; Expression={ if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" } }
+}, @{
+    Name="Publisher"; Expression={ if ($_.Publisher) { $_.Publisher } else { "---" } }
+}
+
+# Remove duplicados
+$apps = $apps | Sort-Object Name -Unique
+
+# Saída limpa (melhor que Write-Host)
+$apps | ForEach-Object {
+    "$($_.Name)###$($_.Version)###$($_.Publisher)"
 }
 `;
 
