@@ -1,5 +1,6 @@
 
 
+1. Salvar projeto em c:\PSManager
 1. install git
 1. install node
 1. diretorio de execução dos psexec (c:windows/system32) 

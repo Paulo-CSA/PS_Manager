@@ -2,7 +2,28 @@ import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
 import { Buffer } from 'buffer';
 
-const SOFTWARE_SCRIPT = `$paths = @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and ($_.Publisher -notmatch 'Microsoft') -and ($_.DisplayName -notmatch \"^Windows \") } | ForEach-Object { write-host \"$($_.DisplayName)###$($_.DisplayVersion)###$($_.Publisher)\" }`;
+const SOFTWARE_SCRIPT = `
+$ErrorActionPreference = 'SilentlyContinue'
+$paths = @(
+    'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+    'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+    'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+)
+foreach ($path in $paths) {
+    $items = Get-ItemProperty $path
+    foreach ($item in $items) {
+        if ($item.DisplayName) {
+            $name = $item.DisplayName
+            $ver = if ($item.DisplayVersion) { $item.DisplayVersion } else { "---" }
+            $pub = if ($item.Publisher) { $item.Publisher } else { "---" }
+            # Filter Microsoft-labeled apps to reduce clutter as requested before
+            if ($pub -notmatch "Microsoft" -and $name -notmatch "^Windows") {
+                Write-Output "$name###$ver###$pub"
+            }
+        }
+    }
+}
+`;
 
 /**
  * Isolated execution logic for Software Management
@@ -20,19 +41,28 @@ async function softwareExec(host: string, script: string, user?: string, pass?: 
   return new Promise((resolve, reject) => {
     const child = spawn(psexec, args, { shell: false, windowsHide: true });
     const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
 
     child.stdout.on('data', (d) => stdoutChunks.push(d));
+    child.stderr.on('data', (d) => stderrChunks.push(d));
 
     const timeout = setTimeout(() => {
       child.kill('SIGKILL');
       reject(new Error('Timeout na consulta de software'));
     }, 90000);
 
-    child.on('close', () => {
+    child.on('close', (code) => {
       clearTimeout(timeout);
       const buf = Buffer.concat(stdoutChunks);
       let out = iconv.decode(buf, 'cp850');
       if (!out.trim() && buf.length > 0) out = iconv.decode(buf, 'utf-8');
+      
+      const errBuf = Buffer.concat(stderrChunks);
+      const errOut = iconv.decode(errBuf, 'cp850');
+      if (errOut.trim()) {
+        console.warn(`[SOFT_EXEC_WARN] Stderr for ${host}:`, errOut);
+      }
+
       resolve(out.replace(/\0/g, ''));
     });
 
@@ -88,7 +118,8 @@ $appName = "${appName}"
 
 $paths = @(
  'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
- 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+ 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+ 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
 
 $app = Get-ItemProperty $paths -ErrorAction SilentlyContinue |
@@ -125,22 +156,31 @@ if ($cmd -match "msiexec") {
 }
 else {
     # --- EXE ROBUSTO ---
+    $cmd = $cmd.Trim()
     $exe = ""
     $args = ""
 
-    if ($cmd.StartsWith('"')) {
-        $exe = $cmd.Split('"')[1]
-        $args = $cmd.Substring($exe.Length + 2)
+    if ($cmd -match '^"([^"]+)"\s*(.*)$') {
+        $exe = $Matches[1]
+        $args = $Matches[2]
+    } elseif ($cmd -match '^(.*\.exe)(\s+.*)?$') {
+        $exe = $Matches[1]
+        $args = if ($Matches[2]) { $Matches[2].Trim() } else { "" }
     } else {
-        $parts = $cmd.Split(" ",2)
-        $exe = $parts[0]
+        $parts = $cmd.Split(" ", 2)
+        $exe = $parts[0].Trim('"')
         if ($parts.Length -gt 1) { $args = $parts[1] }
     }
 
     Write-Host "EXE: $exe"
     Write-Host "ARGS: $args"
 
-    # NÃO adiciona flags cegamente
+    # Tenta adicionar silent flag se for WinRAR ou similar e não houver args
+    if (-not $args -and ($exe -like "*WinRAR*" -or $exe -like "*uninstall.exe")) {
+        $args = "/S"
+        Write-Host "Auto-adicionando /S para desinstalação silenciosa"
+    }
+
     Start-Process -FilePath $exe -ArgumentList $args -Wait -ErrorAction SilentlyContinue
 }
 
