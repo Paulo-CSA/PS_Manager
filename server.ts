@@ -193,80 +193,65 @@ function formatOutput(stdout: string, stderr: string): string {
 }
 
 // --- Software Management (Isolated) ---
-const SOFTWARE_REGISTRY_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
-$apps = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue |
-Where-Object {
-    ($_.Publisher -notmatch 'Microsoft') -and
-    ($_.DisplayName -notmatch 'Microsoft') -and
-    ($_.DisplayName -ne $null)
-} |
-Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}} |
-Sort-Object Name
-$apps | ConvertTo-Json -Compress
-"`;
+const SOFTWARE_REGISTRY_COMMAND = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue | Where-Object { ($_.Publisher -notmatch 'Microsoft') -and ($_.DisplayName -notmatch 'Microsoft') -and ($_.DisplayName -ne $null) } | Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}} | Sort-Object Name | ConvertTo-Json -Compress"`;
 
 async function getRemoteSoftware(host: string, user?: string, pass?: string): Promise<any[]> {
-  const psexec = 'psexec.exe';
-  const auth = [];
-  if (user) auth.push('-u', user);
-  if (pass) auth.push('-p', pass);
-  
-  const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h', 'cmd', '/c', SOFTWARE_REGISTRY_COMMAND];
-
-  return new Promise((resolve) => {
+  try {
     console.log(`[SOFTWARE_QUERY] ${host}`);
-    const child = spawn(psexec, args, { shell: false, windowsHide: true });
-    
-    const chunks: Buffer[] = [];
-    child.stdout.on('data', (d) => chunks.push(d));
-    
-    child.on('close', () => {
-      try {
-        const raw = iconv.decode(Buffer.concat(chunks), 'cp850');
-        const lines = raw.split('\n');
-        let jsonStr = '';
-        let capturing = false;
-        
-        for (const line of lines) {
-          if (line.trim().startsWith('[') || line.trim().startsWith('{')) capturing = true;
-          if (capturing) jsonStr += line;
-        }
-
-        if (!jsonStr.trim()) {
-          resolve([]);
-          return;
-        }
-
-        const data = JSON.parse(jsonStr);
-        resolve(Array.isArray(data) ? data : [data]);
-      } catch (e) {
-        console.error(`[SOFTWARE_ERROR] ${host}:`, e);
-        resolve([]);
-      }
+    const result = await winExecute({ 
+      host, 
+      command: SOFTWARE_REGISTRY_COMMAND, 
+      username: user, 
+      password: pass 
     });
+    
+    const raw = result.stdout;
+    let jsonStr = '';
+    const startIndex = raw.indexOf('[');
+    const lastIndex = raw.lastIndexOf(']');
+    
+    if (startIndex !== -1 && lastIndex !== -1 && lastIndex > startIndex) {
+      jsonStr = raw.substring(startIndex, lastIndex + 1);
+    } else {
+      // Fallback for single object if array wasn't returned
+      const objStart = raw.indexOf('{');
+      const objEnd = raw.lastIndexOf('}');
+      if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
+        jsonStr = raw.substring(objStart, objEnd + 1);
+      }
+    }
 
-    child.on('error', () => resolve([]));
-    setTimeout(() => { child.kill('SIGKILL'); resolve([]); }, 60000);
-  });
+    if (!jsonStr.trim()) {
+      console.log(`[SOFTWARE_QUERY] No valid JSON found in output for ${host}`);
+      return [];
+    }
+
+    const data = JSON.parse(jsonStr);
+    const finalData = Array.isArray(data) ? data : [data];
+    console.log(`[SOFTWARE_QUERY] Found ${finalData.length} apps for ${host}`);
+    return finalData;
+  } catch (e) {
+    console.error(`[SOFTWARE_ERROR] ${host}:`, e);
+    return [];
+  }
 }
 
 async function uninstallRemoteSoftware(host: string, appName: string, user?: string, pass?: string): Promise<boolean> {
-  const psexec = 'psexec.exe';
-  const auth = [];
-  if (user) auth.push('-u', user);
-  if (pass) auth.push('-p', pass);
-
   const uninstallCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "$app = Get-ItemProperty @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*') -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '${appName}' } | Select-Object -First 1; if ($app.UninstallString) { $cmd = $app.UninstallString -replace 'msiexec.exe?\\s*/[iI]', 'msiexec.exe /x'; Start-Process cmd.exe -ArgumentList '/c', $cmd, '/quiet', '/norestart' -Wait }"`;
 
-  const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-h', 'cmd', '/c', uninstallCmd];
-
-  return new Promise((resolve) => {
+  try {
     console.log(`[SOFTWARE_UNINSTALL] ${appName} on ${host}`);
-    const child = spawn(psexec, args, { shell: false, windowsHide: true });
-    child.on('close', (code) => resolve(code === 0));
-    child.on('error', () => resolve(false));
-    setTimeout(() => { child.kill('SIGKILL'); resolve(false); }, 120000);
-  });
+    const result = await winExecute({ 
+      host, 
+      command: uninstallCmd, 
+      username: user, 
+      password: pass 
+    });
+    return result.exitCode === 0;
+  } catch (err) {
+    console.error(`[UNINSTALL_ERROR] ${host}:`, err);
+    return false;
+  }
 }
 
 async function startServer() {
