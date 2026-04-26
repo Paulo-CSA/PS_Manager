@@ -76,49 +76,12 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command); 
       } else {
-        const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-        const localBatPath = path.join(TEMP_BATCH_DIR, `cmd_${uniqueId}.bat`);
-        const remoteOutFile = `C:\\psexec_temp_${uniqueId}.txt`;
+        // Construct the remote command with output redirection to a temporary file
+        // and a delay before deletion to ensure psexec captures the output.
+        const remoteOutFile = "C:\\out.txt";
+        const fullRemoteCmd = `cmd /c "${command} > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 5 /nobreak > nul 2>&1 & del /f /q ${remoteOutFile}"`;
         
-        const batContent = `@echo off\r\n${command} > "C:\\out.txt" 2>&1\r\ntype "C:\\out.txt"\r\ntimeout /t 5 /nobreak > nul 2>&1\r\ndel /f /q "C:\\out.txt"`;
-        
-        try {
-          await fsp.writeFile(localBatPath, batContent);
-          args.push('-c', localBatPath);
-          
-          const cleanupLocal = () => fs.unlink(localBatPath, () => {});
-          
-          const child = spawn(executable, args, { shell: false, windowsHide: true });
-          let stdoutChunks: Buffer[] = [];
-          let stderrChunks: Buffer[] = [];
-
-          child.stdout.on('data', (d) => stdoutChunks.push(d));
-          child.stderr.on('data', (d) => stderrChunks.push(d));
-
-          const timer = setTimeout(() => {
-            child.kill();
-            cleanupLocal();
-            reject(new Error('Timeout de 60s excedido.'));
-          }, 60000);
-
-          child.on('close', (code) => {
-            clearTimeout(timer);
-            cleanupLocal();
-            const stdout = iconv.decode(Buffer.concat(stdoutChunks), 'cp850');
-            const stderr = iconv.decode(Buffer.concat(stderrChunks), 'cp850');
-            console.log(`[EXEC] Batch Result - Code: ${code} | Stdout: ${stdout.length} chars`);
-            resolve({ stdout, stderr, exitCode: code });
-          });
-
-          child.on('error', (err) => {
-            clearTimeout(timer);
-            cleanupLocal();
-            reject(err);
-          });
-          return;
-        } catch (e) {
-          return reject(new Error('Falha ao criar script temporário.'));
-        }
+        args.push('cmd', '/c', fullRemoteCmd);
       }
     }
 
