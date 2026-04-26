@@ -7,7 +7,7 @@ import bodyParser from 'body-parser';
 import cors from 'cors';
 import fs from 'fs';
 import fsp from 'fs/promises';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import iconv from 'iconv-lite';
 import { Buffer } from 'buffer';
 
@@ -61,54 +61,50 @@ async function winExecute(options: {
   const { host, command, username, password, isScript } = options;
   const isLocal = host === 'localhost' || host === '127.0.0.1';
 
+  // Using execFile with large maxBuffer (10MB) to satisfy user requirements for "full output"
   const runArgs = (executable: string, args: string[], capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
     return new Promise((resolve, reject) => {
-      console.log(`[SPAWN] ${executable} ${args.join(' ')}`);
-      const child = spawn(executable, args, { 
-        shell: false, 
+      console.log(`[EXEC_FILE] ${executable} ${args.join(' ')}`);
+      
+      const options = {
+        encoding: 'buffer' as const,
+        maxBuffer: 20 * 1024 * 1024, // 20 MB buffer
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      
-      const stdoutChunks: Buffer[] = [];
-      const stderrChunks: Buffer[] = [];
-      
-      const timeout = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`Timeout na execução (${executable})`));
-      }, 120000);
+        timeout: 180000, // 3 minutes timeout
+      };
 
-      if (capture) {
-        child.stdout.on('data', (chunk: Buffer) => {
-          stdoutChunks.push(chunk);
-        });
-        child.stderr.on('data', (chunk: Buffer) => {
-          stderrChunks.push(chunk);
-        });
-      }
-
-      child.on('close', (code) => {
-        clearTimeout(timeout);
+      execFile(executable, args, options, (error, stdout, stderr) => {
         let out = '';
         let err = '';
-        
-        if (capture) {
-          const outBuf = Buffer.concat(stdoutChunks);
-          const errBuf = Buffer.concat(stderrChunks);
-          
-          out = iconv.decode(outBuf, 'cp850');
-          if (!out.trim() && outBuf.length > 0) out = iconv.decode(outBuf, 'utf-8');
-          
-          err = iconv.decode(errBuf, 'cp850');
-          if (!err.trim() && errBuf.length > 0) err = iconv.decode(errBuf, 'utf-8');
-        }
-        
-        resolve({ out, err, code });
-      });
+        let code: number | null = 0;
 
-      child.on('error', (err) => {
-        clearTimeout(timeout);
-        reject(err);
+        if (error) {
+          code = typeof error.code === 'number' ? error.code : 1;
+        }
+
+        if (capture) {
+          // Attempt decoding
+          const decodeBuffer = (buf: Buffer) => {
+            if (!buf || buf.length === 0) return '';
+            
+            // Try to detect UTF-16 (BOM or common pattern)
+            if (buf.length >= 2 && ((buf[0] === 0xFF && buf[1] === 0xFE) || (buf[0] === 0xFE && buf[1] === 0xFF))) {
+                 return iconv.decode(buf, 'utf16');
+            }
+            
+            let decoded = iconv.decode(buf, 'cp850');
+            // Check if it looks empty or corrupted (e.g. lots of nulls)
+            if (!decoded.trim() && buf.length > 0) {
+              decoded = iconv.decode(buf, 'utf-8');
+            }
+            return decoded.replace(/\0/g, ''); // Clean nulls regardless
+          };
+
+          out = decodeBuffer(stdout);
+          err = decodeBuffer(stderr);
+        }
+
+        resolve({ out, err, code });
       });
     });
   };
@@ -143,21 +139,22 @@ async function winExecute(options: {
       const createArgs = [...baseArgs, 'cmd', '/c', `(${command}) > ${remoteOutFile} 2>&1`].filter(v => v !== '');
       await runArgs(psexec, createArgs, false);
 
-      await sleep(5000);
+      await sleep(3000);
 
       // 2. READ FILE
-      console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
-      const readArgs = [...baseArgs, 'cmd', '/c', `type ${remoteOutFile}`].filter(v => v !== '');
+      console.log(`[EXEC] ${host} [STEP 2] Lendo via PowerShell (mais robusto): ${remoteOutFile}`);
+      // Get-Content is better for handling various encodings
+      const readArgs = [...baseArgs, 'powershell', '-NoProfile', '-Command', `Get-Content -Path '${remoteOutFile}' -Raw`].filter(v => v !== '');
       const readRes = await runArgs(psexec, readArgs, true);
       
-      console.log(`[READ INFO] ${host} stdout bytes: ${readRes.out.length}, stderr_bytes: ${readRes.err.length}`);
+      console.log(`[READ INFO] ${host} stdout length: ${readRes.out.length}`);
 
       // 3. DELETE FILE (Detached Cleanup)
       console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
       const cleanupArgs = [...baseArgs, 'cmd', '/c', `ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}`].filter(v => v !== '');
       spawn(psexec, cleanupArgs, { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
 
-      return { stdout: readRes.out.replace(/\0/g, ''), stderr: readRes.err, exitCode: readRes.code };
+      return { stdout: readRes.out, stderr: readRes.err, exitCode: readRes.code };
     }
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
