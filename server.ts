@@ -59,6 +59,7 @@ async function winExecute(options: {
     let args: string[] = [];
 
     const isLocal = host === 'localhost' || host === '127.0.0.1';
+    let tempBatPath: string | null = null;
 
     if (isLocal) {
       executable = 'cmd.exe';
@@ -76,10 +77,17 @@ async function winExecute(options: {
       if (isScript) {
         args.push('-c', command); 
       } else {
-        // Use a more direct approach to avoid redundant 'cmd /c' wrappers and quoting issues
-        const tempFile = 'C:\\psexec_out_' + Math.floor(Math.random() * 99999) + '.txt';
-        // We pass the shell components as individual arguments to psexec to let it handle them
-        args.push('cmd', '/c', `${command} > ${tempFile} 2>&1 & type ${tempFile} & del ${tempFile}`);
+        // Robust approach: Create a temporary .bat locally and use psexec -c to copy and run it.
+        // This solves all escaping, redirection (&, |, >) and encoding issues.
+        try {
+          tempBatPath = path.join(STORAGE_DIR, `cmd_${Math.floor(Math.random() * 99999)}.bat`);
+          // Use CRLF and forced UTF-8 (with BOM for some windows apps, but chcp 65001 is usually enough)
+          const batContent = `@echo off\r\nchcp 65001 > nul\r\n${command}\r\n`;
+          fs.writeFileSync(tempBatPath, batContent);
+          args.push('-c', tempBatPath);
+        } catch (e) {
+          return reject(new Error('Falha ao preparar comando temporário.'));
+        }
       }
     }
 
@@ -105,23 +113,30 @@ async function winExecute(options: {
     const timeoutDuration = isScript ? 180000 : 60000;
     const timer = setTimeout(() => {
       child.kill();
+      if (tempBatPath && fs.existsSync(tempBatPath)) fs.unlinkSync(tempBatPath);
       reject(new Error(`Timeout na execução remota (${timeoutDuration / 1000}s)`));
     }, timeoutDuration);
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (tempBatPath && fs.existsSync(tempBatPath)) {
+        try { fs.unlinkSync(tempBatPath); } catch (e) {}
+      }
       
       const stdoutRaw = Buffer.concat(stdoutChunks);
       const stderrRaw = Buffer.concat(stderrChunks);
       
-      let stdout = iconv.decode(stdoutRaw, 'cp850');
-      let stderr = iconv.decode(stderrRaw, 'cp850');
+      // Try UTF-8 since we used chcp 65001
+      let stdout = iconv.decode(stdoutRaw, 'utf-8');
+      let stderr = iconv.decode(stderrRaw, 'utf-8');
 
-      if (!stdout.trim() && stdoutRaw.length > 0) {
-        stdout = iconv.decode(stdoutRaw, 'utf-8');
+      // Check for valid content or fallback to CP850
+      // We check if the decoded string has obvious replacement characters or is empty
+      if (stdoutRaw.length > 0 && (!stdout.trim() || stdout.includes('\uFFFD'))) {
+        stdout = iconv.decode(stdoutRaw, 'cp850');
       }
-      if (!stderr.trim() && stderrRaw.length > 0) {
-        stderr = iconv.decode(stderrRaw, 'utf-8');
+      if (stderrRaw.length > 0 && (!stderr.trim() || stderr.includes('\uFFFD'))) {
+        stderr = iconv.decode(stderrRaw, 'cp850');
       }
 
       console.log(`[EXEC] Close Code: ${code} | Stdout: ${stdoutRaw.length} bytes | Stderr: ${stderrRaw.length} bytes`);
@@ -137,33 +152,31 @@ async function winExecute(options: {
 }
 
 /**
- * Cleaner filter for PsExec output.
+ * Permissive filter for PsExec output.
+ * Only removes the branding and connection noise.
  */
 function formatOutput(stdout: string, stderr: string): string {
   const combined = (stdout + '\n' + stderr).trim();
   if (!combined) return 'Vazio (nenhum dado retornado do console).';
 
   const filterPhrases = [
-    'psexec v',
     'sysinternals',
     'copyright',
     'starting psexec service',
     'connecting to',
     'connected to',
     'exited on',
-    'psexec.exe',
-    'microsoft (r) windows (r)'
+    'psexec.exe'
   ];
 
   const lines = combined.split('\n');
   const filtered = lines.filter(line => {
     const l = line.trim().toLowerCase();
-    if (!l) return false;
     
-    // Skip common informational noise
+    // Always keep lines that contain text unless they match noise phrases
     if (filterPhrases.some(p => l.includes(p))) return false;
     
-    // Skip common windows prompt patterns like C:\>
+    // Skip common windows prompt patterns like C:\> if they appear at the very start of a line
     if (/^[a-z]:\\.*>$/i.test(l)) return false;
 
     return true;
