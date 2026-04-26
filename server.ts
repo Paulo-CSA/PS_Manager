@@ -131,17 +131,35 @@ async function winExecute(options: {
       await sleep(5000);
 
       // 2. READ FILE
-      console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
-      const readCmd = `${baseAuth} cmd /c "type ${remoteOutFile}"`;
+      console.log(`[EXEC] ${host} [STEP 2] Lendo via Base64: ${remoteOutFile}`);
+      // Use PowerShell to convert to Base64 to ensure NO truncation and NO encoding loss during transit
+      const readCmd = `${baseAuth} powershell -NoProfile -ExecutionPolicy Bypass -Command "[Convert]::ToBase64String([IO.File]::ReadAllBytes('${remoteOutFile}'))"`;
       const readRes = await runSingle(readCmd, true);
-      console.log(`[READ INFO] ${host} bytes lidos: ${readRes.out.length}`);
+      
+      let finalOutput = '';
+      try {
+        // PsExec might still output some invisible chars or newlines, clean the string for Base64
+        const b64Data = readRes.out.trim().replace(/[\r\n\s]/g, '');
+        if (b64Data.length > 0) {
+          const buffer = Buffer.from(b64Data, 'base64');
+          finalOutput = iconv.decode(buffer, 'cp850');
+          if (!finalOutput.trim()) finalOutput = iconv.decode(buffer, 'utf-8');
+        } else {
+          finalOutput = 'Arquivo vazio ou não lido.';
+        }
+      } catch (err) {
+        console.error(`[DECODE ERROR] ${host}:`, err);
+        finalOutput = readRes.out; // Fallback to raw output if decoding fails
+      }
+
+      console.log(`[READ INFO] ${host} caracteres finais: ${finalOutput.length}`);
 
       // 3. DELETE FILE (Detached Cleanup)
       console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
       const cleanupCmd = `${baseAuth} cmd /c "ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}"`;
       spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
 
-      return { stdout: readRes.out, stderr: '', exitCode: readRes.code };
+      return { stdout: finalOutput, stderr: '', exitCode: readRes.code };
     }
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
