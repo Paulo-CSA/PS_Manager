@@ -8,6 +8,8 @@ import cors from 'cors';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import { spawn } from 'child_process';
+import iconv from 'iconv-lite';
+import { Buffer } from 'buffer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,55 +60,47 @@ async function winExecute(options: {
 
     const isLocal = host === 'localhost' || host === '127.0.0.1';
 
+    // Force UTF-8 communication with the remote/local shell
+    const wrappedCommand = `chcp 65001 > nul && ${command}`;
+
     if (isLocal) {
-      // Direct CMD execution for local machine
       executable = 'cmd.exe';
-      args = ['/c', command];
+      args = ['/c', wrappedCommand];
     } else {
-      // PsExec execution for remote machines
-      executable = 'psexec.exe'; // Explicitly looking for the .exe
-      
-      // Target host
+      executable = 'psexec'; 
       args.push(`\\\\${host}`);
 
-      // Credentials
       if (username) args.push('-u', username);
       if (password) args.push('-p', password);
 
-      // PsExec Flags
-      // -c: copy script (used for .bat files)
-      // -accepteula: non-interactive EULA acceptance
-      // -nobanner: cleaner output
       args.push('-accepteula', '-nobanner');
 
       if (isScript) {
-        args.push('-c', command); // command is the local path to the script
+        args.push('-c', command); 
       } else {
-        // cmd /c allows executing arbitrary shell commands remotely
-        args.push('cmd', '/c', command);
+        args.push('cmd', '/c', wrappedCommand);
       }
     }
 
-    console.log(`[EXEC] Running: ${executable} ${args.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
+    console.log(`[EXEC] Running: ${executable} ${args.join(' ')}`);
 
     const child = spawn(executable, args, {
       shell: true,
       windowsHide: true,
     });
 
-    let stdout = '';
-    let stderr = '';
+    let stdoutChunks: Buffer[] = [];
+    let stderrChunks: Buffer[] = [];
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
+    child.stdout.on('data', (data: Buffer) => {
+      stdoutChunks.push(data);
     });
 
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
+    child.stderr.on('data', (data: Buffer) => {
+      stderrChunks.push(data);
     });
 
-    // Timeout: 2 minutes for scripts, 30s for commands
-    const timeoutDuration = isScript ? 120000 : 45000;
+    const timeoutDuration = isScript ? 180000 : 60000;
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`Timeout na execução remota (${timeoutDuration / 1000}s)`));
@@ -114,6 +108,22 @@ async function winExecute(options: {
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      
+      // Decode using CP850 (standard Windows CLI) or UTF-8 if chcp 65001 worked
+      const stdoutRaw = Buffer.concat(stdoutChunks);
+      const stderrRaw = Buffer.concat(stderrChunks);
+      
+      // Try UTF-8 first (because of chcp 65001), fallback to CP850
+      let stdout = iconv.decode(stdoutRaw, 'utf-8');
+      let stderr = iconv.decode(stderrRaw, 'utf-8');
+
+      if (!stdout.trim() && stdoutRaw.length > 0) {
+        stdout = iconv.decode(stdoutRaw, 'cp850');
+      }
+      if (!stderr.trim() && stderrRaw.length > 0) {
+        stderr = iconv.decode(stderrRaw, 'cp850');
+      }
+
       resolve({ stdout, stderr, exitCode: code });
     });
 
@@ -125,31 +135,42 @@ async function winExecute(options: {
 }
 
 /**
- * Filters out PsExec internal messages to show only relevant output.
+ * Cleaner filter for PsExec output.
  */
 function formatOutput(stdout: string, stderr: string): string {
   const combined = (stdout + '\n' + stderr).trim();
-  if (!combined) return 'Sem dados de saída do console.';
+  if (!combined) return 'Vazio (nenhum dado retornado do console).';
+
+  const filterPhrases = [
+    'psexec v',
+    'sysinternals',
+    'copyright',
+    'starting psexec service',
+    'connecting to',
+    'connected to',
+    'exited on',
+    'chcp 65001',
+    'psexec.exe'
+  ];
 
   return combined.split('\n')
     .filter(line => {
       const l = line.trim().toLowerCase();
       if (!l) return false;
-      // Filter common PsExec noise
-      if (l.includes('psexec v')) return false;
-      if (l.includes('sysinternals')) return false;
-      if (l.includes('copyright')) return false;
-      if (l.includes('starting psexec service')) return false;
-      if (l.includes('connecting to')) return false;
-      if (l.includes('connected to')) return false;
       
-      // Filter windows command prompts
+      // Skip common informational noise
+      if (filterPhrases.some(p => l.includes(p))) return false;
+      
+      // Skip the command echo if PsExec does it
+      if (l.startsWith('cmd /c')) return false;
+
+      // Skip common windows prompt patterns like C:\>
       if (/^[a-z]:\\.*>$/i.test(l)) return false;
-      
+
       return true;
     })
     .join('\n')
-    .trim() || combined; // Fallback to raw if filtering result is empty
+    .trim() || combined;
 }
 
 async function startServer() {
