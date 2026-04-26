@@ -5,67 +5,34 @@ import { Buffer } from 'buffer';
 const SOFTWARE_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
 
-$results = @()
-
-# Fonte 1: Registro
-$regPaths = @(
+# Fonte Principal: Registro (Desktop Apps como CCleaner, WinRAR, Firefox)
+$paths = @(
     'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
 
-foreach ($path in $regPaths) {
-    $items = Get-ItemProperty $path
-    foreach ($item in $items) {
-        if ($item.DisplayName) {
-            $results += [PSCustomObject]@{
-                Name = $item.DisplayName
-                Version = if ($item.DisplayVersion) { $item.DisplayVersion } else { "---" }
-                Publisher = if ($item.Publisher) { $item.Publisher } else { "---" }
-            }
-        }
-    }
+$registryApps = Get-ItemProperty $paths | Where-Object { $_.DisplayName -ne $null } | ForEach-Object {
+    $ver = if ($_.DisplayVersion) { $_.DisplayVersion } else { "---" }
+    $pub = if ($_.Publisher) { $_.Publisher } else { "---" }
+    "$($_.DisplayName)###$ver###$pub"
 }
 
-# Fonte 2: WMI (Win32_Product) - Usado com cautela
-Get-WmiObject Win32_Product | ForEach-Object {
-    if ($_.Name) {
-        $results += [PSCustomObject]@{
-            Name = $_.Name
-            Version = if ($_.Version) { $_.Version } else { "---" }
-            Publisher = if ($_.Vendor) { $_.Vendor } else { "---" }
-        }
+# Fonte Secundária: Microsoft Store (Apps como BreeZip)
+$storeApps = if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+    Get-AppxPackage | Where-Object { $_.Name -notmatch '^[0-9a-fA-F-]{8}-' -and $_.IsFramework -eq $false } | ForEach-Object {
+        "$($_.Name)###$($_.Version)###Microsoft Store"
     }
-}
+} else { @() }
 
-# Fonte 3: Get-AppxPackage (Microsoft Store Apps - BreeZip, etc)
-if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
-    Get-AppxPackage | ForEach-Object {
-        $results += [PSCustomObject]@{
-            Name = $_.Name
-            Version = $_.Version
-            Publisher = "Microsoft Store"
-        }
-    }
-}
+# Junta tudo, remove duplicados e limpa entradas irrelevantes
+$allApps = ($registryApps + $storeApps) | Select-Object -Unique | Where-Object { 
+    $_ -notmatch '^Update ' -and 
+    $_ -notmatch '^Security Update' -and
+    $_ -notmatch '^Hotfix'
+} | Sort-Object
 
-# Fonte 4: Get-Package
-if (Get-Command Get-Package -ErrorAction SilentlyContinue) {
-    Get-Package | ForEach-Object {
-        $results += [PSCustomObject]@{
-            Name = $_.Name
-            Version = $_.Version
-            Publisher = if ($_.Publisher) { $_.Publisher } else { "---" }
-        }
-    }
-}
-
-# Remover duplicados e formatar saída
-$results | Sort-Object Name -Unique | ForEach-Object {
-    if ($_.Name) {
-        Write-Output "$($_.Name)###$($_.Version)###$($_.Publisher)"
-    }
-}
+$allApps | ForEach-Object { Write-Output $_ }
 `;
 
 /**
