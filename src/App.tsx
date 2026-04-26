@@ -4,7 +4,6 @@ import {
   Shield, Terminal, Cpu, CheckCircle, XCircle, RefreshCw,
   LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash
 } from 'lucide-react';
-import { SoftwareManager } from './components/SoftwareManager';
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Types ---
@@ -70,6 +69,7 @@ const App = () => {
   const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
   const [customCommand, setCustomCommand] = useState('');
   const [ipConfig, setIpConfig] = useState({ ip: '', mask: '255.255.255.0', gw: '' });
+  const [installedApps, setInstalledApps] = useState<any[]>([]);
   const [tempExecHost, setTempExecHost] = useState<string[] | null>(null);
   
   const [verboseMode, setVerboseMode] = useState(false);
@@ -349,14 +349,63 @@ const App = () => {
     }
   };
 
-  const listApps = () => {
+  const listApps = async () => {
     if (selectedHosts.length === 0) {
       alert('Selecione uma máquina para listar os apps.');
       return;
     }
-    setIsAppModalOpen(true);
+    const host = selectedHosts[0];
+    setLog(prev => [...prev, `[SYSTEM] Consultando aplicativos via registro em ${host}...`]);
+    setIsWaitModalOpen(true);
+    
+    try {
+      const res = await fetch('/api/apps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.apps) {
+        setInstalledApps(data.apps);
+        setIsAppModalOpen(true);
+        setLog(prev => [...prev, `[SYSTEM] ${data.apps.length} aplicativos encontrados em ${host}.`]);
+      } else {
+        setLog(prev => [...prev, `[ERROR] Falha ao listar apps: ${data.error || 'Erro desconhecido'}`]);
+      }
+    } catch (err) {
+      setLog(prev => [...prev, `[ERROR] Erro de rede ao listar apps.`]);
+    } finally {
+      setIsWaitModalOpen(false);
+    }
   };
 
+  const uninstallApp = async (appName: string) => {
+    if (!confirm(`Deseja realmente desinstalar "${appName}"?`)) return;
+    const host = selectedHosts[0];
+    setLog(prev => [...prev, `[SYSTEM] Solicitando desinstalação de "${appName}" em ${host}...`]);
+    setIsWaitModalOpen(true);
+
+    try {
+      const res = await fetch('/api/apps/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, appName })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        setLog(prev => [...prev, `[SYSTEM] Comando de desinstalação enviado com sucesso para ${host}.`]);
+        setIsAppModalOpen(false);
+      } else {
+        setLog(prev => [...prev, `[ERROR] Falha ao desinstalar: ${data.error || 'Erro no PsExec'}`]);
+      }
+    } catch (err) {
+      setLog(prev => [...prev, `[ERROR] Erro de rede ao desinstalar.`]);
+    } finally {
+      setIsWaitModalOpen(false);
+    }
+  };
 
   const openTerminal = (host: string) => {
     setTerminalHost(host);
@@ -1004,14 +1053,59 @@ const App = () => {
         )}
       </AnimatePresence>
 
-      {/* App Management - Isolated Module */}
-      {isAppModalOpen && selectedHosts[0] && (
-        <SoftwareManager 
-          host={selectedHosts[0]} 
-          onClose={() => setIsAppModalOpen(false)} 
-          onLog={(msg) => setLog(prev => [...prev, msg])}
-        />
-      )}
+      {/* App Management Modal */}
+      <AnimatePresence>
+        {isAppModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-[#111] border border-white/10 rounded-3xl p-8 w-full max-w-2xl shadow-2xl max-h-[80vh] flex flex-col"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <Activity className="text-blue-500" /> Aplicativos Instalados
+                </h3>
+                <button onClick={() => setIsAppModalOpen(false)} className="text-gray-500 hover:text-white transition-colors">
+                  <XCircle size={24} />
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
+                <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[10px] font-mono text-gray-500 uppercase tracking-widest border-b border-white/5">
+                  <div className="col-span-6">Nome</div>
+                  <div className="col-span-2">Versão</div>
+                  <div className="col-span-3">Publicador</div>
+                  <div className="col-span-1"></div>
+                </div>
+                {installedApps.length === 0 ? (
+                  <p className="text-center text-gray-500 py-12">Nenhum aplicativo encontrado ou erro na listagem.</p>
+                ) : installedApps.map((app, i) => (
+                  <div key={i} className="grid grid-cols-12 gap-2 items-center p-3 bg-white/5 border border-white/5 rounded-xl hover:bg-white/10 transition-all group">
+                    <div className="col-span-6 text-xs font-medium truncate" title={app.Name}>{app.Name}</div>
+                    <div className="col-span-2 text-[10px] font-mono text-gray-500">{app.Version || '---'}</div>
+                    <div className="col-span-3 text-[10px] text-gray-400 truncate">{app.Publisher || '---'}</div>
+                    <div className="col-span-1 flex justify-end">
+                      <button 
+                        onClick={() => uninstallApp(app.Name)}
+                        className="p-1.5 bg-red-500/10 text-red-500 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all transform hover:scale-105"
+                        title="Desinstalar"
+                      >
+                        <Trash size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              <div className="mt-6 pt-4 border-t border-white/5 text-[10px] text-gray-500 uppercase text-center tracking-widest">
+                Exibindo resultados para {selectedHosts[0]}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Loading Overlay Modal */}
       <AnimatePresence>
