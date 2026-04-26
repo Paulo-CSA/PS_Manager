@@ -47,6 +47,7 @@ async function writeDb(data: any) {
 /**
  * Robust execution engine for Windows.
  * Handles PsExec and direct CMD execution for localhost.
+ * Executes in 3 stages for remote machines: 1. Create, 2. Read, 3. Cleanup.
  */
 async function winExecute(options: {
   host: string;
@@ -54,82 +55,68 @@ async function winExecute(options: {
   username?: string;
   password?: string;
   isScript?: boolean;
-}) {
+}): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   const { host, command, username, password, isScript } = options;
+  const isLocal = host === 'localhost' || host === '127.0.0.1';
 
-  return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
-    const isLocal = host === 'localhost' || host === '127.0.0.1';
-    
-    let fullExecutionCommand = '';
-    let thisCleanup: (() => void) | null = null;
-
-    if (isLocal) {
-      fullExecutionCommand = `cmd /c "${command}"`;
-    } else {
-      const psexec = 'psexec.exe';
-      const auth = `${username ? `-u "${username}"` : ''} ${password ? `-p "${password}"` : ''}`;
-
-      if (isScript) {
-        // -c actually copies the file to the remote machine
-        fullExecutionCommand = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h -c "${command}"`;
-      } else {
-        const uniqueId = Math.floor(Math.random() * 100000);
-        const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
-        const captureLogic = `(${command}) ^> ${remoteOutFile} 2^>^&1 ^& type ${remoteOutFile}`;
-        
-        fullExecutionCommand = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h cmd /c ${captureLogic}`;
-
-        thisCleanup = () => {
-          const cleanupCmd = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h cmd /c ping 127.0.0.1 -n 10 ^>nul ^& del /f /q ${remoteOutFile}`;
-          console.log(`[CLEANUP] Iniciando limpeza em ${host}: ${remoteOutFile}`);
-          spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
-        };
+  const runSingle = (cmdStr: string, capture: boolean): Promise<{ out: string; code: number | null }> => {
+    return new Promise((resolve, reject) => {
+      const child = spawn(cmdStr, [], { 
+        shell: true, 
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let out = '';
+      if (capture) {
+        child.stdout.on('data', (d) => out += iconv.decode(d, 'cp850'));
       }
+      child.on('close', (code) => resolve({ out, code }));
+      child.on('error', reject);
+    });
+  };
+
+  if (isLocal) {
+    console.log(`[EXEC] Local | Command: ${command}`);
+    const res = await runSingle(`cmd /c "${command}"`, true);
+    return { stdout: res.out, stderr: '', exitCode: res.code };
+  }
+
+  const psexec = 'psexec.exe';
+  const auth = `${username ? `-u "${username}"` : ''} ${password ? `-p "${password}"` : ''}`;
+  const baseAuth = `${psexec} \\\\${host} ${auth} -accepteula -nobanner -h`;
+
+  try {
+    if (isScript) {
+      // For scripts, use -c to copy and execute
+      console.log(`[EXEC] ${host} | Script: ${command}`);
+      const scriptExec = `${baseAuth} -c "${command}"`;
+      const res = await runSingle(scriptExec, true);
+      return { stdout: res.out, stderr: '', exitCode: res.code };
+    } else {
+      const uniqueId = Math.floor(Math.random() * 100000);
+      const remoteOutFile = `C:\\Windows\\Temp\\out_${uniqueId}.txt`;
+
+      // 1. CREATE FILE
+      console.log(`[EXEC] ${host} [STEP 1] Criando: ${remoteOutFile}`);
+      const createCmd = `${baseAuth} cmd /c "(${command}) > ${remoteOutFile} 2>&1"`;
+      await runSingle(createCmd, false);
+
+      // 2. READ FILE
+      console.log(`[EXEC] ${host} [STEP 2] Lendo: ${remoteOutFile}`);
+      const readCmd = `${baseAuth} cmd /c "type ${remoteOutFile}"`;
+      const readRes = await runSingle(readCmd, true);
+
+      // 3. DELETE FILE (Detached Cleanup)
+      console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
+      const cleanupCmd = `${baseAuth} cmd /c "ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}"`;
+      spawn(cleanupCmd, [], { shell: true, windowsHide: true, stdio: 'ignore' }).unref();
+
+      return { stdout: readRes.out, stderr: '', exitCode: readRes.code };
     }
-
-    console.log(`[EXEC] ${host} | Executing: ${fullExecutionCommand}`);
-
-    const child = spawn(fullExecutionCommand, [], {
-      shell: true,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-
-    let stdoutChunks: Buffer[] = [];
-    let stderrChunks: Buffer[] = [];
-
-    child.stdout.on('data', (data: Buffer) => stdoutChunks.push(data));
-    child.stderr.on('data', (data: Buffer) => stderrChunks.push(data));
-
-    const timeoutDuration = isScript ? 180000 : 120000;
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      if (thisCleanup) thisCleanup();
-      reject(new Error(`Timeout na execução para ${host} (${timeoutDuration / 1000}s)`));
-    }, timeoutDuration);
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (thisCleanup) thisCleanup();
-
-      const stdoutRaw = Buffer.concat(stdoutChunks);
-      const stderrRaw = Buffer.concat(stderrChunks);
-      
-      let stdout = iconv.decode(stdoutRaw, 'cp850');
-      let stderr = iconv.decode(stderrRaw, 'cp850');
-
-      if (!stdout.trim() && stdoutRaw.length > 0) stdout = iconv.decode(stdoutRaw, 'utf-8');
-      if (!stderr.trim() && stderrRaw.length > 0) stderr = iconv.decode(stderrRaw, 'utf-8');
-
-      console.log(`[EXEC] ${host} Finalizado | Code: ${code} | Out: ${stdoutRaw.length} bytes`);
-      resolve({ stdout, stderr, exitCode: code });
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
+  } catch (err: any) {
+    console.error(`[EXEC ERROR] ${host}:`, err.message);
+    throw err;
+  }
 }
 
 /**
