@@ -78,14 +78,14 @@ async function winExecute(options: {
       } else {
         // Strategic approach: Redirect all output to a unique remote temporary file,
         // then read its content via 'type' and delete it. 
-        // This ensures commands like ipconfig and qwinsta have their output captured by PsExec.
-        const uniqueId = Date.now() + '_' + Math.floor(Math.random() * 1000);
-        const tempFile = `C:\\psexec_output_${uniqueId}.txt`;
+        // We use the escaping pattern suggested by the user to avoid parsing issues.
+        const uniqueId = Math.floor(Math.random() * 10000);
+        const tempFile = `C:\\out_${uniqueId}.txt`;
         
-        // Construct a robust command block. We wrap the main command in another cmd call to handle redirection properly.
-        const wrappedCommand = `cmd /c "${command} > ${tempFile} 2>&1 & type ${tempFile} & del /f /q ${tempFile}"`;
-        
-        args.push('cmd', '/c', wrappedCommand);
+        // Construct the command string using the user's suggested format
+        // We pass this as a single string to cmd /c to let the shell handle the operators correctly
+        const fullRemoteCmd = `${command} ^> ${tempFile} 2^>^&1 ^& type ${tempFile} ^& del /f /q ${tempFile}`;
+        args.push('cmd', '/c', fullRemoteCmd);
       }
     }
 
