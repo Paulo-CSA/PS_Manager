@@ -77,9 +77,11 @@ async function winExecute(options: {
         args.push('-c', command); 
       } else {
         // Construct the remote command with output redirection to a temporary file
-        // and a delay before deletion to ensure psexec captures the output.
+        // directly as arguments to PsExec. We avoid redundant 'cmd /c' and use 
+        // the shell features of the remote process.
         const remoteOutFile = "C:\\out.txt";
-        const fullRemoteCmd = `cmd /c "${command} > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 5 /nobreak > nul 2>&1 & del /f /q ${remoteOutFile}"`;
+        // One level of cmd /c is enough. The quotes around the full command block are handled by PsExec or the local spawn.
+        const fullRemoteCmd = `${command} > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 5 /nobreak > nul 2>&1 & del /f /q ${remoteOutFile}`;
         
         args.push('cmd', '/c', fullRemoteCmd);
       }
