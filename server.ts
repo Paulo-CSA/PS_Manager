@@ -80,8 +80,8 @@ async function winExecute(options: {
         // directly as arguments to PsExec. We avoid redundant 'cmd /c' and use 
         // the shell features of the remote process.
         const remoteOutFile = "C:\\out.txt";
-        // One level of cmd /c is enough. The quotes around the full command block are handled by PsExec or the local spawn.
-        const fullRemoteCmd = `${command} > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 5 /nobreak > nul 2>&1 & del /f /q ${remoteOutFile}`;
+        // Increased timeout to 20s as requested by user to ensure full output capture
+        const fullRemoteCmd = `${command} > ${remoteOutFile} 2>&1 & type ${remoteOutFile} & timeout /t 20 /nobreak > nul 2>&1 & del /f /q ${remoteOutFile}`;
         
         args.push('cmd', '/c', fullRemoteCmd);
       }
@@ -106,7 +106,8 @@ async function winExecute(options: {
       stderrChunks.push(data);
     });
 
-    const timeoutDuration = isScript ? 180000 : 60000;
+    // Increased timeout to 90s to support the 20s remote wait
+    const timeoutDuration = isScript ? 180000 : 90000;
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`Timeout na execução remota (${timeoutDuration / 1000}s)`));
