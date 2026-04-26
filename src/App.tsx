@@ -760,24 +760,24 @@ const App = () => {
                   <Terminal size={14} className="text-gray-500" />
                   <span className="text-[10px] font-mono uppercase text-gray-500 tracking-widest">Saída do Console</span>
                 </div>
-                <div className="flex-1 overflow-y-auto font-mono text-[11px] space-y-3 text-[#E4E3E0] p-3 custom-scrollbar bg-black/20">
+                <div className="flex-1 overflow-y-auto font-mono text-[11px] space-y-4 text-[#E4E3E0] p-4 custom-scrollbar bg-black/20">
                   {log.map((line, i) => {
                     const isCmd = line.startsWith('[CMD]');
                     const isError = line.startsWith('[ERROR]');
                     const isSuccess = line.includes('SUCCESS');
                     
                     return (
-                      <div key={i} className="flex gap-3 group">
-                        <span className="opacity-10 select-none text-[9px] shrink-0 w-4 text-right mt-0.5">{i + 1}</span>
-                        <div className={`flex-1 ${isCmd ? 'text-blue-400 font-bold' : isError ? 'text-red-400' : isSuccess ? 'text-emerald-400' : ''}`}>
-                          <pre className="whitespace-pre-wrap break-all leading-normal font-mono">
+                      <div key={i} className="flex gap-4 group border-b border-white/5 pb-4 last:border-0">
+                        <span className="opacity-10 select-none text-[9px] shrink-0 w-6 text-right mt-1 font-sans">{i + 1}</span>
+                        <div className={`flex-1 overflow-x-auto custom-scrollbar ${isCmd ? 'text-blue-400 font-bold' : isError ? 'text-red-400' : isSuccess ? 'text-emerald-400' : ''}`}>
+                          <pre className="whitespace-pre font-mono leading-relaxed">
                             {line}
                           </pre>
                         </div>
                       </div>
                     );
                   })}
-                  {log.length === 0 && <div className="text-gray-700 italic h-full flex items-center justify-center">Console pronto para comandos remotas...</div>}
+                  {log.length === 0 && <div className="text-gray-700 italic h-full flex items-center justify-center font-sans tracking-wide">Console pronto para comandos remotas...</div>}
                   <div ref={logEndRef} />
                 </div>
               </div>

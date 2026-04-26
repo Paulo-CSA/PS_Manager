@@ -220,82 +220,75 @@ async function startServer() {
   app.post('/api/shell', async (req, res) => {
     const { host, command } = req.body;
     const db = await readDb();
-    const machine = db.machines.find((m: any) => m.ip === host);
-
-    if (!machine) {
-      return res.status(404).json({ error: 'Host não encontrado na base de dados' });
-    }
-
     const creds = db.credentials;
+    
     if (!creds || !creds.username || !creds.password) {
-      return res.status(400).json({ error: 'Credenciais globais não configuradas' });
+      return res.status(400).json({ error: 'Credenciais nao configuradas.' });
     }
 
     const { username, password } = creds;
 
     try {
-      // Priority: -accepteula first, -h for elevation, -s for system (optional but -h is safer with provided creds)
+      // Use -h for elevated session (best for ipconfig, qwinsta, etc)
       const escapedCommand = command.replace(/"/g, '""');
-      const fullCmd = `psexec -accepteula \\\\${host} -u ${username} -p ${password} -h cmd /c "${escapedCommand}"`;
+      const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
       
       console.log(`[SHELL_REMOTO] ${fullCmd}`);
 
       const { stdout, stderr } = await execWin(fullCmd, 60000);
       
-      let combined = stdout || '';
-      if (stderr) {
-        combined += (combined ? '\n\n--- [LOGS DE SISTEMA] ---\n' : '') + stderr;
-      }
-
-      res.json({ output: cleanOutput(combined) || 'Executado (Sem retorno).' });
+      const combined = (stdout || '') + (stderr || '');
+      res.json({ output: cleanOutput(combined) || 'Comando executado sem retorno textual.' });
     } catch (err: any) {
-      const errorMsg = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
-      res.status(500).json({ error: cleanOutput(errorMsg) });
+      const errorMsg = (err.stdout || '') + (err.stderr || '') + (err.message || '');
+      res.status(500).json({ error: cleanOutput(errorMsg) || 'Erro na execucao remota' });
     }
   });
 
   app.post('/api/exec', async (req, res) => {
-    const { hosts, command, username, password } = req.body;
-    if (!hosts || !command) return res.status(400).json({ error: 'Dados incompletos' });
-    
+    const { hosts, command, username: bodyUsername, password: bodyPassword } = req.body;
+    const db = await readDb();
+    const username = bodyUsername || db.credentials?.username;
+    const password = bodyPassword || db.credentials?.password;
+
+    if (!hosts || !Array.isArray(hosts) || !command) {
+      return res.status(400).json({ error: 'Dados incompletos' });
+    }
+
     try {
       const results = await Promise.all(hosts.map(async (host: string) => {
         try {
           if (username && password && host !== 'localhost' && host !== '127.0.0.1') {
             const escapedCommand = command.replace(/"/g, '""');
-            // Standardizing to high-compatibility elevated remote exec
-            const fullCmd = `psexec -accepteula \\\\${host} -u ${username} -p ${password} -h cmd /c "${escapedCommand}"`;
+            const fullCmd = `psexec -accepteula \\\\${host} -u "${username}" -p "${password}" -h cmd /c "${escapedCommand}"`;
             
-            console.log(`[EXEC_WIN] ${fullCmd}`);
+            console.log(`[BULK_EXEC] ${fullCmd}`);
 
             const { stdout, stderr } = await execWin(fullCmd, 60000);
             
-            let combined = stdout || '';
-            if (stderr) {
-              combined += (combined ? '\n\n--- [LOGS DE SISTEMA] ---\n' : '') + stderr;
-            }
-            
+            const combined = (stdout || '') + (stderr || '');
             const cleaned = cleanOutput(combined);
-            return { host, status: 'success', output: cleaned || 'Executado (Sem retorno de texto).' };
+            
+            return { host, status: 'success', output: cleaned || 'Executado sem retorno.' };
           } else {
             // Local fallback
             const { stdout, stderr } = await execWin(command);
-            const combined = [stdout, stderr].filter(Boolean).join('\n');
+            const combined = (stdout || '') + (stderr || '');
             return { host, status: 'success', output: cleanOutput(combined) };
           }
         } catch (err: any) {
-          const rawError = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n');
+          const rawError = (err.stdout || '') + (err.stderr || '') + (err.message || '');
           const cleaned = cleanOutput(rawError);
           return { 
             host, 
             status: 'failed', 
-            output: cleaned || 'Erro desconhecido durante execução remota'
+            output: cleaned || 'Erro na execucao remota'
           };
         }
       }));
       res.json({ results });
     } catch (err) {
-      console.error('Erro na API de exec:', err);
+      console.error('Erro na API de execute:', err);
       res.status(500).json({ error: 'Erro interno no servidor' });
     }
   });
@@ -304,7 +297,13 @@ async function startServer() {
   function cleanOutput(raw: string): string {
     if (!raw) return '';
     // Preserve characters but normalize line endings. Remove null bytes.
-    return raw.replace(/\0/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // PsExec often produces \r\r\n, so we normalize to single \n
+    return raw
+      .replace(/\0/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/\n\n+/g, '\n\n') // Prevent excessive empty lines
+      .trim();
   }
 
   // Debug log endpoint
