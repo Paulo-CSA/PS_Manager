@@ -61,16 +61,16 @@ async function winExecute(options: {
   const { host, command, username, password, isScript } = options;
   const isLocal = host === 'localhost' || host === '127.0.0.1';
 
-  // Using execFile with large maxBuffer (10MB) to satisfy user requirements for "full output"
+  // Using execFile with very large maxBuffer (100MB) for full output capture
   const runArgs = (executable: string, args: string[], capture: boolean): Promise<{ out: string; err: string; code: number | null }> => {
     return new Promise((resolve, reject) => {
       console.log(`[EXEC_FILE] ${executable} ${args.join(' ')}`);
       
       const options = {
         encoding: 'buffer' as const,
-        maxBuffer: 20 * 1024 * 1024, // 20 MB buffer
+        maxBuffer: 100 * 1024 * 1024, // 100 MB buffer
         windowsHide: true,
-        timeout: 180000, // 3 minutes timeout
+        timeout: 240000, // 4 minutes timeout
       };
 
       execFile(executable, args, options, (error, stdout, stderr) => {
@@ -83,7 +83,6 @@ async function winExecute(options: {
         }
 
         if (capture) {
-          // Attempt decoding
           const decodeBuffer = (buf: Buffer) => {
             if (!buf || buf.length === 0) return '';
             
@@ -139,22 +138,42 @@ async function winExecute(options: {
       const createArgs = [...baseArgs, 'cmd', '/c', `(${command}) > ${remoteOutFile} 2>&1`].filter(v => v !== '');
       await runArgs(psexec, createArgs, false);
 
-      await sleep(3000);
+      await sleep(10000);
 
       // 2. READ FILE
-      console.log(`[EXEC] ${host} [STEP 2] Lendo via PowerShell (mais robusto): ${remoteOutFile}`);
-      // Get-Content is better for handling various encodings
-      const readArgs = [...baseArgs, 'powershell', '-NoProfile', '-Command', `Get-Content -Path '${remoteOutFile}' -Raw`].filter(v => v !== '');
+      console.log(`[EXEC] ${host} [STEP 2] Lendo via Hex: ${remoteOutFile}`);
+      // Using HEX ensures NO truncation and NO encoding issues during transmission
+      const readArgs = [...baseArgs, 'powershell', '-NoProfile', '-Command', 
+        `$p='${remoteOutFile}'; if(Test-Path $p){ $b=[IO.File]::ReadAllBytes($p); '---HEX---'; [System.BitConverter]::ToString($b); '---END---' }`
+      ].filter(v => v !== '');
       const readRes = await runArgs(psexec, readArgs, true);
       
-      console.log(`[READ INFO] ${host} stdout length: ${readRes.out.length}`);
+      let finalOutput = '';
+      const hexMatch = readRes.out.match(/---HEX---([\s\S]*?)---END---/);
+      
+      if (hexMatch && hexMatch[1]) {
+        try {
+          const hexStr = hexMatch[1].trim().replace(/[\r\n\s-]/g, '');
+          const buffer = Buffer.from(hexStr, 'hex');
+          finalOutput = iconv.decode(buffer, 'cp850');
+          if (!finalOutput.trim()) finalOutput = iconv.decode(buffer, 'utf-8');
+          finalOutput = finalOutput.replace(/\0/g, '');
+        } catch (decErr) {
+          console.error(`[HEX ERROR] ${host}:`, decErr);
+          finalOutput = "Erro ao decodificar HEX.";
+        }
+      } else {
+        finalOutput = readRes.out.replace(/---HEX---|---END---/g, '').trim();
+      }
+
+      console.log(`[READ INFO] ${host} final length: ${finalOutput.length}`);
 
       // 3. DELETE FILE (Detached Cleanup)
       console.log(`[EXEC] ${host} [STEP 3] Limpando: ${remoteOutFile}`);
-      const cleanupArgs = [...baseArgs, 'cmd', '/c', `ping 127.0.0.1 -n 10 >nul & del /f /q ${remoteOutFile}`].filter(v => v !== '');
+      const cleanupArgs = [...baseArgs, 'cmd', '/c', `ping 127.0.0.1 -n 15 >nul & del /f /q ${remoteOutFile}`].filter(v => v !== '');
       spawn(psexec, cleanupArgs, { shell: false, windowsHide: true, stdio: 'ignore' }).unref();
 
-      return { stdout: readRes.out, stderr: readRes.err, exitCode: readRes.code };
+      return { stdout: finalOutput, stderr: readRes.err, exitCode: readRes.code };
     }
   } catch (err: any) {
     console.error(`[EXEC ERROR] ${host}:`, err.message);
