@@ -199,11 +199,11 @@ $paths = @(
     'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
     'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
 )
-$apps = Get-ItemProperty $paths -ErrorAction SilentlyContinue | 
-    Where-Object { $_.DisplayName -ne $null } | 
-    Select-Object @{n='Name';e={$_.DisplayName}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}} |
-    Sort-Object Name
-$apps | ConvertTo-Json -Compress
+$results = foreach ($path in $paths) {
+    Get-ItemProperty $path -ErrorAction SilentlyContinue | 
+    Select-Object @{n='Name';e={if($_.DisplayName){$_.DisplayName}else{$_.PSChildName}}}, @{n='Version';e={$_.DisplayVersion}}, @{n='Publisher';e={$_.Publisher}}, @{n='Id';e={$_.PSChildName}}
+}
+$results | Where-Object { $_.Name -ne $null } | Sort-Object Name | ConvertTo-Json -Compress
 "`;
 
 async function getRemoteSoftware(host: string, user?: string, pass?: string): Promise<any[]> {

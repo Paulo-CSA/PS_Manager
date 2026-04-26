@@ -69,6 +69,7 @@ const App = () => {
   // Forms
   const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
   const [customCommand, setCustomCommand] = useState('');
+  const [ipConfig, setIpConfig] = useState({ ip: '', mask: '255.255.255.0', gw: '' });
   const [tempExecHost, setTempExecHost] = useState<string[] | null>(null);
   
   const [verboseMode, setVerboseMode] = useState(false);
