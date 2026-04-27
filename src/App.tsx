@@ -159,29 +159,25 @@ const App = () => {
 
   const clearLogs = () => setLog([]);
 
-  // Guard to prevent initial save loop
-  const isInitialized = useRef(false);
-
   // Load data from Server
+  const dataLoaded = useRef(false);
   useEffect(() => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    fetch('/api/data', { signal: controller.signal })
-      .then(res => res.json())
-      .then(db => {
-        clearTimeout(timeoutId);
+    const load = async () => {
+      try {
+        const res = await fetch('/api/data');
+        const db = await res.json();
         if (db.machines) setMachines(db.machines);
         if (db.credentials) setCreds(db.credentials);
         if (db.ous) setOus(db.ous);
-        setLoading(false);
-      })
-      .catch(err => {
-        clearTimeout(timeoutId);
+        dataLoaded.current = true;
+      } catch (err) {
         console.error('Falha ao carregar dados do servidor', err);
-        setLog(prev => [...prev, '[SYSTEM] Erro ao conectar ao servidor. Usando cache local.']);
+        setLog(prev => [...prev, '[SYSTEM] Erro ao conectar ao servidor.']);
+      } finally {
         setLoading(false);
-      });
+      }
+    };
+    load();
   }, []);
 
   const fetchScripts = async () => {
@@ -252,53 +248,30 @@ const App = () => {
     setIsWaitModalOpen(false);
   };
 
-  // Save machines to Server whenever they change
+  // Debounced auto-save for machines and OUs (only after initial load)
   useEffect(() => {
-    if (loading || !isInitialized.current) {
-      if (!loading) isInitialized.current = true;
-      return;
-    }
-    
-    const timeoutId = setTimeout(() => {
+    if (!dataLoaded.current) return;
+    const t = setTimeout(() => {
       fetch('/api/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ machines })
       });
-    }, 500); // Small debounce
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [machines]);
 
-    return () => clearTimeout(timeoutId);
-  }, [machines, loading]);
-
-  // Save credentials to Server whenever they change
   useEffect(() => {
-    if (loading || !isInitialized.current) return;
-    
-    const timeoutId = setTimeout(() => {
-      fetch('/api/credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credentials: creds })
-      });
-    }, 500); // Small debounce
-
-    return () => clearTimeout(timeoutId);
-  }, [creds, loading]);
-
-  // Save OUs to Server
-  useEffect(() => {
-    if (loading || !isInitialized.current) return;
-    
-    const timeoutId = setTimeout(() => {
+    if (!dataLoaded.current) return;
+    const t = setTimeout(() => {
       fetch('/api/ous', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ous })
       });
-    }, 500);
-
-    return () => clearTimeout(timeoutId);
-  }, [ous, loading]);
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [ous]);
 
   const handleUpdateMachine = () => {
     if (editingMachine) {
@@ -380,10 +353,24 @@ const App = () => {
     setSelectedHosts(prev => prev.filter(h => h !== machines.find(m => m.id === id)?.ip));
   };
 
-  const saveCreds = () => {
-    // Already saved via useEffect
-    setLog(prev => [...prev, `[SYSTEM] Credenciais salvas localmente.`]);
-    setActiveTab('dashboard');
+  const saveCreds = async () => {
+    setLog(prev => [...prev, `[SYSTEM] Salvando credenciais no servidor...`]);
+    try {
+      const res = await fetch('/api/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credentials: creds })
+      });
+      if (res.ok) {
+        setLog(prev => [...prev, `[SYSTEM] Credenciais sincronizadas com sucesso.`]);
+        setActiveTab('dashboard');
+      } else {
+        throw new Error('Falha na resposta do servidor');
+      }
+    } catch (err) {
+      setLog(prev => [...prev, `[ERROR] Falha ao salvar credenciais no servidor.`]);
+      alert('Erro ao salvar credenciais.');
+    }
   };
 
   const runPing = async () => {

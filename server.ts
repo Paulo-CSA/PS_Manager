@@ -45,6 +45,7 @@ async function readDb() {
     // Migration/Ensure fields
     if (!data.ous) data.ous = ['GERAL'];
     if (!data.machines) data.machines = [];
+    if (!data.credentials) data.credentials = { username: '', password: '' };
     return data;
   } catch (e) {
     return { 
@@ -231,7 +232,11 @@ async function startServer() {
 
   // --- Persistence Routes ---
   app.get('/api/data', async (req, res) => {
-    res.json(await readDb());
+    const db = await readDb();
+    if (db.credentials) {
+      console.log(`[API_DATA] Serving data. Username: ${db.credentials.username || 'NONE'}`);
+    }
+    res.json(db);
   });
 
   app.post('/api/ous', async (req, res) => {
@@ -385,7 +390,9 @@ async function startServer() {
     const db = await readDb();
     const { username, password } = db.credentials;
 
-    if (!username || !password) return res.status(400).json({ error: 'Credenciais não configuradas' });
+    console.log(`[SHELL] Request for ${host}. Username is ${username ? 'present' : 'EMPTY'}`);
+
+    if (!username || !password) return res.status(400).json({ error: 'Credenciais não configuradas (username ou password vazio)' });
 
     try {
       const result = await winExecute({ host, command, username, password });
