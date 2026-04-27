@@ -243,6 +243,35 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post('/api/ps-test', async (req, res) => {
+    const { host, user, pass } = req.body;
+    try {
+      const psexec = 'psexec.exe';
+      const auth = [];
+      if (user) auth.push('-u', user);
+      if (pass) auth.push('-p', pass);
+      
+      const args = [`\\\\${host}`, ...auth, '-accepteula', '-nobanner', '-n', '5', 'cmd', '/c', 'echo 1'];
+      const child = spawn(psexec, args, { shell: false, windowsHide: true });
+      
+      const timeout = setTimeout(() => {
+        child.kill();
+      }, 10000);
+
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        res.json({ success: code === 0 });
+      });
+
+      child.on('error', () => {
+        clearTimeout(timeout);
+        res.json({ success: false });
+      });
+    } catch (e) {
+      res.json({ success: false });
+    }
+  });
+
   app.post('/api/machines', async (req, res) => {
     const { machines } = req.body;
     const db = await readDb();

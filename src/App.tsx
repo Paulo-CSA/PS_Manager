@@ -12,6 +12,7 @@ interface Machine {
   name: string;
   ip: string;
   status: 'online' | 'offline' | 'unknown';
+  manageable?: boolean;
   lastPing?: string;
   ownerId: string;
   ou: string;
@@ -343,6 +344,23 @@ const App = () => {
       setLog(prev => [...prev, `[SYSTEM] Verificação de conectividade concluída.`]);
     } catch (err) {
       setLog(prev => [...prev, `[ERROR] Falha ao realizar ping.`]);
+    }
+  };
+
+  const checkManagement = async (m: Machine) => {
+    setLog(prev => [...prev, `[SYSTEM] Verificando gerenciamento em ${m.ip}...`]);
+    try {
+      const res = await fetch('/api/ps-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: m.ip, user: creds.username, pass: creds.password })
+      });
+      const data = await res.json();
+      setMachines(prev => prev.map(mach => mach.ip === m.ip ? { ...mach, manageable: data.success } : mach));
+      setLog(prev => [...prev, `[${m.ip}] Gerenciamento PsExec: ${data.success ? 'DISPONÍVEL' : 'NEGADO'}`]);
+    } catch (err) {
+      setMachines(prev => prev.map(mach => mach.ip === m.ip ? { ...mach, manageable: false } : mach));
+      setLog(prev => [...prev, `[${m.ip}] Erro ao verificar gerenciamento.`]);
     }
   };
 
@@ -728,10 +746,11 @@ const App = () => {
                       checked={selectedHosts.length === machines.length && machines.length > 0}
                     />
                   </div>
-                  <div className="col-span-1">Status</div>
-                  <div className="col-span-4">Identificação</div>
+                  <div className="col-span-1 text-center">Status</div>
+                  <div className="col-span-3">Identificação</div>
                   <div className="col-span-2">Endereço IP</div>
-                  <div className="col-span-2">Última Atividade</div>
+                  <div className="col-span-1 text-center">Gerenc.</div>
+                  <div className="col-span-2">Atividade</div>
                   <div className="col-span-2 text-center">Ações</div>
                 </div>
 
@@ -761,8 +780,23 @@ const App = () => {
                           'bg-gray-600'
                         }`} />
                       </div>
-                      <div className="col-span-4 font-medium">{m.name}</div>
+                      <div className="col-span-3 font-medium truncate">{m.name}</div>
                       <div className="col-span-2 font-mono text-sm text-blue-400">{m.ip}</div>
+                      <div className="col-span-1 flex justify-center">
+                        {m.manageable === undefined ? (
+                          <button 
+                            onClick={() => checkManagement(m)}
+                            className="bg-white/5 hover:bg-blue-600/20 text-gray-500 hover:text-blue-400 p-1.5 rounded transition-all"
+                            title="Verificar Gerenciamento"
+                          >
+                            <Shield size={14} />
+                          </button>
+                        ) : (
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${m.manageable ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
+                            {m.manageable ? 'SIM' : 'NÃO'}
+                          </span>
+                        )}
+                      </div>
                       <div className="col-span-2 text-xs text-gray-500">
                         {m.lastPing ? new Date(m.lastPing).toLocaleTimeString() : '---'}
                       </div>
