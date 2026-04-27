@@ -848,19 +848,19 @@ const App = () => {
                       <div className="col-span-3 font-medium truncate">{m.name}</div>
                       <div className="col-span-2 font-mono text-sm text-blue-400">{m.ip}</div>
                       <div className="col-span-1 flex justify-center">
-                        {m.manageable === undefined ? (
-                          <button 
-                            onClick={() => checkManagement(m)}
-                            className="bg-white/5 hover:bg-blue-600/20 text-gray-500 hover:text-blue-400 p-1.5 rounded transition-all"
-                            title="Verificar Gerenciamento"
-                          >
-                            <Shield size={14} />
-                          </button>
-                        ) : (
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${m.manageable ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
-                            {m.manageable ? 'SIM' : 'NÃO'}
-                          </span>
-                        )}
+                        <button 
+                          onClick={() => checkManagement(m)}
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-all hover:scale-105 active:scale-95 ${
+                            m.manageable === undefined 
+                              ? 'bg-white/5 text-gray-500 hover:bg-blue-600/20 hover:text-blue-400 p-1.5' 
+                              : m.manageable 
+                                ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20' 
+                                : 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
+                          }`}
+                          title={m.manageable === undefined ? "Verificar Gerenciamento" : "Refazer Verificação"}
+                        >
+                          {m.manageable === undefined ? <Shield size={14} /> : m.manageable ? 'SIM' : 'NÃO'}
+                        </button>
                       </div>
                       <div className="col-span-2 text-xs text-gray-500">
                         {m.lastPing ? new Date(m.lastPing).toLocaleTimeString() : '---'}
