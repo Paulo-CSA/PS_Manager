@@ -33,6 +33,76 @@ const App = () => {
   const [ous, setOus] = useState<string[]>(['GERAL']);
   const [activeOU, setActiveOU] = useState<string>('GERAL');
   const [newOUName, setNewOUName] = useState('');
+  const [newOUParent, setNewOUParent] = useState<string>('');
+  const [expandedOUs, setExpandedOUs] = useState<Set<string>>(new Set(['GERAL']));
+
+  const toggleOUExpanded = (ou: string) => {
+    setExpandedOUs(prev => {
+      const next = new Set(prev);
+      if (next.has(ou)) next.delete(ou);
+      else next.add(ou);
+      return next;
+    });
+  };
+
+  const getOUTree = () => {
+    const tree: any = {};
+    ous.sort().forEach(path => {
+      const parts = path.split('/');
+      let current = tree;
+      let fullPath = '';
+      parts.forEach((part, index) => {
+        fullPath = fullPath ? `${fullPath}/${part}` : part;
+        if (!current[part]) {
+          current[part] = { _path: fullPath, _children: {} };
+        }
+        current = current[part]._children;
+      });
+    });
+    return tree;
+  };
+
+  const renderOUTree = (node: any, level: number = 0) => {
+    return Object.keys(node).sort().map(key => {
+      const item = node[key];
+      const hasChildren = Object.keys(item._children).length > 0;
+      const isExpanded = expandedOUs.has(item._path);
+      const isActive = activeOU === item._path;
+
+      return (
+        <div key={item._path} className="select-none">
+          <div 
+            className={`flex items-center gap-1 py-1 px-2 rounded-lg cursor-pointer transition-all group ${
+              isActive ? 'bg-blue-600 text-white shadow-lg' : 'hover:bg-white/5 text-gray-400 hover:text-white'
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setActiveOU(item._path);
+              setCurrentPage(1);
+            }}
+          >
+            <div style={{ marginLeft: `${level * 12}px` }} className="flex items-center gap-1 flex-1 min-w-0">
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleOUExpanded(item._path);
+                }}
+                className={`w-4 h-4 flex items-center justify-center rounded hover:bg-white/10 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+              >
+                {hasChildren ? <ChevronRight size={12} /> : <div className="w-1 h-1 rounded-full bg-gray-600 ml-1" />}
+              </button>
+              <span className="text-xs font-medium truncate">{key}</span>
+            </div>
+          </div>
+          {hasChildren && isExpanded && (
+            <div className="mt-1">
+              {renderOUTree(item._children, level + 1)}
+            </div>
+          )}
+        </div>
+      );
+    });
+  };
   const [selectedHosts, setSelectedHosts] = useState<string[]>([]);
   const [creds, setCreds] = useState<Credentials>({ username: '', password: '' });
   const [log, setLog] = useState<string[]>([]);
@@ -494,7 +564,10 @@ const App = () => {
   // Table Filtering and Pagination
   const filteredMachines = machines.filter(m => {
     const matchesStatus = statusFilter === 'all' || m.status === 'online';
-    const matchesOU = activeOU === 'GERAL' || m.ou === activeOU;
+    // Match exact OU or if it's a child of the active OU (path-based)
+    const matchesOU = activeOU === 'GERAL' || 
+                      m.ou === activeOU || 
+                      m.ou.startsWith(activeOU + '/');
     const matchesSearch = !searchQuery || 
       m.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
       m.ip.includes(searchQuery);
@@ -579,31 +652,14 @@ const App = () => {
           </div>
 
           <div className="bg-[#151619] border border-white/5 rounded-2xl p-5 overflow-hidden">
-            <h3 className="text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-4">Organização</h3>
-            <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
-              <div className="flex items-center gap-2 text-sm text-gray-300 mb-2 py-1">
-                <div className="w-4 h-4 flex items-center justify-center">
-                  <ChevronRight size={14} className="text-gray-600 rotate-90" />
-                </div>
+            <h3 className="text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-4">Estrutura Organizacional</h3>
+            <div className="max-h-[400px] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-2 text-sm text-gray-300 mb-3 py-1 px-2">
                 <Globe size={14} className="text-blue-500" />
                 <span className="font-bold text-xs">Organização</span>
               </div>
-              <div className="ml-4 border-l border-white/10 pl-2 space-y-1">
-                {ous.map(ou => (
-                  <button 
-                    key={ou}
-                    onClick={() => {
-                      setActiveOU(ou);
-                      setCurrentPage(1);
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2 group ${
-                      activeOU === ou ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                    }`}
-                  >
-                    <div className={`w-1.5 h-1.5 rounded-full ${activeOU === ou ? 'bg-white' : 'bg-gray-600 group-hover:bg-blue-500'}`} />
-                    <span className="truncate">{ou}</span>
-                  </button>
-                ))}
+              <div className="space-y-1">
+                {renderOUTree(getOUTree())}
               </div>
             </div>
           </div>
@@ -958,37 +1014,58 @@ const App = () => {
                     <h3 className="font-bold">Unidades Organizacionais</h3>
                   </div>
                   <div className="space-y-4">
-                    <div className="flex gap-2">
-                      <input 
-                        type="text" 
-                        value={newOUName}
-                        onChange={e => setNewOUName(e.target.value)}
-                        className="flex-1 bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors"
-                        placeholder="Nome da nova OU"
-                      />
-                      <button 
-                        onClick={() => {
-                          if (newOUName && !ous.includes(newOUName)) {
-                            setOus([...ous, newOUName]);
-                            setNewOUName('');
-                          }
-                        }}
-                        className="px-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all"
-                      >
-                        Add
-                      </button>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase text-gray-500 font-bold px-1">Novo Subgrupo/OU</label>
+                        <input 
+                          type="text" 
+                          value={newOUName}
+                          onChange={e => setNewOUName(e.target.value)}
+                          className="w-full bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                          placeholder="Nome da unidade"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase text-gray-500 font-bold px-1">Grupo Pai (Opcional)</label>
+                        <select 
+                          value={newOUParent}
+                          onChange={e => setNewOUParent(e.target.value)}
+                          className="w-full bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 appearance-none bg-no-repeat bg-[right_1rem_center]"
+                          style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundSize: '16px' }}
+                        >
+                          <option value="">Nenhum (Topo)</option>
+                          {ous.map(ou => (
+                            <option key={ou} value={ou}>{ou}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                    <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-2">
-                      {ous.map(ou => (
-                        <div key={ou} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
-                          <span className="text-sm">{ou}</span>
+                    <button 
+                      onClick={() => {
+                        if (newOUName) {
+                          const fullPath = newOUParent ? `${newOUParent}/${newOUName}` : newOUName;
+                          if (!ous.includes(fullPath)) {
+                            setOus([...ous, fullPath]);
+                            setNewOUName('');
+                            setNewOUParent('');
+                          }
+                        }
+                      }}
+                      className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Plus size={16} /> Adicionar Unidade
+                    </button>
+                    <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                      {ous.sort().map(ou => (
+                        <div key={ou} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 group hover:border-white/20 transition-all">
+                          <span className="text-sm font-medium">{ou}</span>
                           {ou !== 'GERAL' && (
                             <button 
                               onClick={() => {
                                 setOus(ous.filter(o => o !== ou));
-                                setMachines(machines.map(m => m.ou === ou ? {...m, ou: 'GERAL'} : m));
+                                setMachines(machines.map(m => (m.ou === ou || m.ou.startsWith(ou + '/')) ? {...m, ou: 'GERAL'} : m));
                               }}
-                              className="text-gray-500 hover:text-red-500 transition-colors"
+                              className="text-gray-500 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
                             >
                               <Trash2 size={16} />
                             </button>
