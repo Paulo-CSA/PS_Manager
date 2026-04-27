@@ -22,6 +22,9 @@ const DB_FILE = path.join(STORAGE_DIR, 'db.json');
 const SCRIPTS_DIR = path.join(process.cwd(), 'remote_scripts');
 const TEMP_BATCH_DIR = path.join(process.cwd(), 'temp_batches');
 
+// Memory Cache for Database to prevent race conditions
+let dbCache: any = null;
+
 // Ensure directories exist
 [STORAGE_DIR, SCRIPTS_DIR, TEMP_BATCH_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
@@ -32,13 +35,16 @@ const TEMP_BATCH_DIR = path.join(process.cwd(), 'temp_batches');
 
 // Database Helpers
 async function readDb() {
+  if (dbCache) return dbCache;
+  
   try {
     if (!fs.existsSync(DB_FILE)) {
-      return { 
+      dbCache = { 
         machines: [], 
         credentials: { username: '', password: '' },
         ous: ['GERAL'] 
       };
+      return dbCache;
     }
     const content = await fsp.readFile(DB_FILE, 'utf-8');
     const data = JSON.parse(content);
@@ -46,27 +52,28 @@ async function readDb() {
     if (!data.ous) data.ous = ['GERAL'];
     if (!data.machines) data.machines = [];
     if (!data.credentials) data.credentials = { username: '', password: '' };
-    return data;
+    dbCache = data;
+    return dbCache;
   } catch (e) {
-    return { 
+    dbCache = { 
       machines: [], 
       credentials: { username: '', password: '' },
       ous: ['GERAL'] 
     };
+    return dbCache;
   }
 }
 
 async function writeDb(data: any) {
   try {
+    dbCache = data; // Always update cache before writing
     if (!fs.existsSync(STORAGE_DIR)) {
       await fsp.mkdir(STORAGE_DIR, { recursive: true });
     }
     const content = JSON.stringify(data, null, 2);
-    // Write directly if rename is failing in this environment
     await fsp.writeFile(DB_FILE, content);
   } catch (err: any) {
     console.error(`[DB_ERROR] Falha ao escrever banco: ${err.message}`);
-    // Fallback attempt
     try {
       fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
     } catch (innerErr) {

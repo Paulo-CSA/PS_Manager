@@ -47,7 +47,7 @@ const App = () => {
 
   const getOUTree = () => {
     const tree: any = {};
-    ous.sort().forEach(path => {
+    [...ous].sort().forEach(path => {
       const parts = path.split('/');
       let current = tree;
       let fullPath = '';
@@ -169,7 +169,11 @@ const App = () => {
         if (db.machines) setMachines(db.machines);
         if (db.credentials) setCreds(db.credentials);
         if (db.ous) setOus(db.ous);
-        dataLoaded.current = true;
+        
+        // Mark as loaded after state updates are processed
+        setTimeout(() => {
+          dataLoaded.current = true;
+        }, 500);
       } catch (err) {
         console.error('Falha ao carregar dados do servidor', err);
         setLog(prev => [...prev, '[SYSTEM] Erro ao conectar ao servidor.']);
@@ -1043,7 +1047,7 @@ const App = () => {
                       <Plus size={16} /> Adicionar Unidade
                     </button>
                     <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                      {ous.sort().map(ou => (
+                      {[...ous].sort().map(ou => (
                         <div key={ou} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 group hover:border-white/20 transition-all">
                           <span className="text-sm font-medium">{ou}</span>
                           {ou !== 'GERAL' && (
