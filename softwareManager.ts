@@ -38,7 +38,8 @@ foreach ($path in $paths) {
 # Fonte: Microsoft Store (para apps como BreeZip)
 if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
     Get-AppxPackage | Where-Object { $_.IsFramework -eq $false -and $_.Name -notmatch 'Microsoft\.' } | ForEach-Object {
-        Write-Output "$($_.Name)###$($_.Version)###Microsoft Store"
+        $friendlyName = if ($_.DisplayName) { $_.DisplayName } else { $_.Name }
+        Write-Output "$friendlyName###$($_.Version)###Microsoft Store ($($_.Name))"
     }
 }
 `;
@@ -179,6 +180,24 @@ export async function uninstallRemoteSoftware(host: string, appName: string, use
   const uninstallScript = `
 $appName = "${appName}"
 
+# 1. Tentar Appx (Microsoft Store)
+if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+    # Procura pelo nome amigável ou pelo nome técnico (que pode estar no Publisher agora)
+    $appx = Get-AppxPackage | Where-Object { 
+        $_.Name -eq $appName -or 
+        $_.PackageFullName -eq $appName -or 
+        $_.DisplayName -eq $appName 
+    } | Select-Object -First 1
+    
+    if ($appx) {
+        Write-Host "Removendo Appx: $($appx.PackageFullName)"
+        Remove-AppxPackage -Package $appx.PackageFullName -ErrorAction SilentlyContinue
+        Write-Host "Desinstalação finalizada"
+        exit 0
+    }
+}
+
+# 2. Tentar Registro (Clássico)
 $paths = @(
  'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
  'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
@@ -186,7 +205,7 @@ $paths = @(
 )
 
 $app = Get-ItemProperty $paths -ErrorAction SilentlyContinue |
-Where-Object { $_.DisplayName -like "*$appName*" } |
+Where-Object { $_.DisplayName -like "*$appName*" -or $_.PSChildName -eq $appName } |
 Select-Object -First 1
 
 if (-not $app) {

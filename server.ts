@@ -33,17 +33,46 @@ const TEMP_BATCH_DIR = path.join(process.cwd(), 'temp_batches');
 // Database Helpers
 async function readDb() {
   try {
+    if (!fs.existsSync(DB_FILE)) {
+      return { 
+        machines: [], 
+        credentials: { username: '', password: '' },
+        ous: ['GERAL'] 
+      };
+    }
     const content = await fsp.readFile(DB_FILE, 'utf-8');
-    return JSON.parse(content);
+    const data = JSON.parse(content);
+    // Migration/Ensure fields
+    if (!data.ous) data.ous = ['GERAL'];
+    if (!data.machines) data.machines = [];
+    return data;
   } catch (e) {
-    return { machines: [], credentials: { username: '', password: '' } };
+    return { 
+      machines: [], 
+      credentials: { username: '', password: '' },
+      ous: ['GERAL'] 
+    };
   }
 }
 
 async function writeDb(data: any) {
-  const tempFile = DB_FILE + '.tmp';
-  await fsp.writeFile(tempFile, JSON.stringify(data, null, 2));
-  await fsp.rename(tempFile, DB_FILE);
+  try {
+    if (!fs.existsSync(STORAGE_DIR)) {
+      await fsp.mkdir(STORAGE_DIR, { recursive: true });
+    }
+    const content = JSON.stringify(data, null, 2);
+    // Write directly if rename is failing in this environment
+    await fsp.writeFile(DB_FILE, content);
+  } catch (err: any) {
+    console.error(`[DB_ERROR] Falha ao escrever banco: ${err.message}`);
+    // Fallback attempt
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+    } catch (innerErr) {
+      console.error(`[DB_CRITICAL] Falha total na persistência:`, innerErr);
+    }
+    throw err;
+  }
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -203,6 +232,15 @@ async function startServer() {
   // --- Persistence Routes ---
   app.get('/api/data', async (req, res) => {
     res.json(await readDb());
+  });
+
+  app.post('/api/ous', async (req, res) => {
+    const { ous } = req.body;
+    if (!Array.isArray(ous)) return res.status(400).json({ error: 'Array de OUs obrigatório' });
+    const db = await readDb();
+    db.ous = ous;
+    await writeDb(db);
+    res.json({ success: true });
   });
 
   app.post('/api/machines', async (req, res) => {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Monitor, Settings, Plus, Trash2, Play, Activity, 
   Shield, Terminal, Cpu, CheckCircle, XCircle, RefreshCw,
-  LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash
+  LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash, Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -14,6 +14,7 @@ interface Machine {
   status: 'online' | 'offline' | 'unknown';
   lastPing?: string;
   ownerId: string;
+  ou: string;
 }
 
 interface Credentials {
@@ -28,6 +29,9 @@ const App = () => {
   const [user] = useState({ uid: 'ps-manager-local-user' });
   const [loading, setLoading] = useState(true);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [ous, setOus] = useState<string[]>(['GERAL']);
+  const [activeOU, setActiveOU] = useState<string>('GERAL');
+  const [newOUName, setNewOUName] = useState('');
   const [selectedHosts, setSelectedHosts] = useState<string[]>([]);
   const [creds, setCreds] = useState<Credentials>({ username: '', password: '' });
   const [log, setLog] = useState<string[]>([]);
@@ -40,6 +44,8 @@ const App = () => {
   
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingMachine, setEditingMachine] = useState<Machine | null>(null);
   const [isExecModalOpen, setIsExecModalOpen] = useState(false);
   const [execResult, setExecResult] = useState<{host: string, status: string, output: string}[] | null>(null);
   const [execLoading, setExecLoading] = useState(false);
@@ -66,7 +72,7 @@ const App = () => {
   }, [terminalLog, isTerminalOpen]);
 
   // Forms
-  const [newMachine, setNewMachine] = useState({ name: '', ip: '' });
+  const [newMachine, setNewMachine] = useState({ name: '', ip: '', ou: 'GERAL' });
   const [customCommand, setCustomCommand] = useState('');
   const [ipConfig, setIpConfig] = useState({ ip: '', mask: '255.255.255.0', gw: '' });
   const [installedApps, setInstalledApps] = useState<any[]>([]);
@@ -96,6 +102,7 @@ const App = () => {
         clearTimeout(timeoutId);
         if (db.machines) setMachines(db.machines);
         if (db.credentials) setCreds(db.credentials);
+        if (db.ous) setOus(db.ous);
         setLoading(false);
       })
       .catch(err => {
@@ -207,6 +214,30 @@ const App = () => {
     return () => clearTimeout(timeoutId);
   }, [creds, loading]);
 
+  // Save OUs to Server
+  useEffect(() => {
+    if (loading || !isInitialized.current) return;
+    
+    const timeoutId = setTimeout(() => {
+      fetch('/api/ous', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ous })
+      });
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [ous, loading]);
+
+  const handleUpdateMachine = () => {
+    if (editingMachine) {
+      setMachines(prev => prev.map(m => m.ip === editingMachine.ip ? editingMachine : m));
+      setLog(prev => [...prev, `[SYSTEM] Máquina ${editingMachine.name} atualizada.`]);
+      setIsEditModalOpen(false);
+      setEditingMachine(null);
+    }
+  };
+
   const handleCsvUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -229,7 +260,8 @@ const App = () => {
             name,
             ip,
             status: 'unknown',
-            ownerId: user.uid
+            ownerId: user.uid,
+            ou: 'GERAL'
           });
         }
       });
@@ -258,12 +290,13 @@ const App = () => {
         name: newMachine.name,
         ip: newMachine.ip,
         status: 'unknown',
-        ownerId: user.uid
+        ownerId: user.uid,
+        ou: newMachine.ou || 'GERAL'
       };
 
       setMachines(prev => [...prev, machine]);
-      setLog(prev => [...prev, `[SYSTEM] Máquina ${machine.name} (${machine.ip}) cadastrada com sucesso.`]);
-      setNewMachine({ name: '', ip: '' });
+      setLog(prev => [...prev, `[SYSTEM] Máquina ${machine.name} (${machine.ip}) cadastrada em ${machine.ou}.`]);
+      setNewMachine({ name: '', ip: '', ou: 'GERAL' });
       setIsAddModalOpen(false);
     } catch (err) {
       console.error('Erro ao adicionar máquina:', err);
@@ -443,10 +476,11 @@ const App = () => {
   // Table Filtering and Pagination
   const filteredMachines = machines.filter(m => {
     const matchesStatus = statusFilter === 'all' || m.status === 'online';
+    const matchesOU = activeOU === 'GERAL' || m.ou === activeOU;
     const matchesSearch = !searchQuery || 
       m.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
       m.ip.includes(searchQuery);
-    return matchesStatus && matchesSearch;
+    return matchesStatus && matchesSearch && matchesOU;
   });
 
   const totalPages = Math.ceil(filteredMachines.length / itemsPerPage);
@@ -527,6 +561,36 @@ const App = () => {
           </div>
 
           <div className="bg-[#151619] border border-white/5 rounded-2xl p-5 overflow-hidden">
+            <h3 className="text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-4">Organização</h3>
+            <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-2 text-sm text-gray-300 mb-2 py-1">
+                <div className="w-4 h-4 flex items-center justify-center">
+                  <ChevronRight size={14} className="text-gray-600 rotate-90" />
+                </div>
+                <Globe size={14} className="text-blue-500" />
+                <span className="font-bold text-xs">Organização</span>
+              </div>
+              <div className="ml-4 border-l border-white/10 pl-2 space-y-1">
+                {ous.map(ou => (
+                  <button 
+                    key={ou}
+                    onClick={() => {
+                      setActiveOU(ou);
+                      setCurrentPage(1);
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2 group ${
+                      activeOU === ou ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                    }`}
+                  >
+                    <div className={`w-1.5 h-1.5 rounded-full ${activeOU === ou ? 'bg-white' : 'bg-gray-600 group-hover:bg-blue-500'}`} />
+                    <span className="truncate">{ou}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-[#151619] border border-white/5 rounded-2xl p-5 overflow-hidden">
             <h3 className="text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-4">Ações Rápidas</h3>
             <div className="grid grid-cols-1 gap-2">
               <button 
@@ -539,34 +603,29 @@ const App = () => {
                 </div>
                 <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
               </button>
-              <button 
-                onClick={() => executeRemote('gpupdate /force')}
-                className="p-3 bg-[#1A1B1E] hover:bg-blue-600 hover:text-white border border-white/5 rounded-xl text-left text-xs transition-all group flex items-center justify-between"
-              >
-                <span>Forçar GPUpdate</span>
-                <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </button>
-              <button 
-                onClick={() => executeRemote('gpresult /r')}
-                className="p-3 bg-[#1A1B1E] hover:bg-blue-600 hover:text-white border border-white/5 rounded-xl text-left text-xs transition-all group flex items-center justify-between"
-              >
-                <span>Obter GPResult /r</span>
-                <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </button>
-              <button 
-                onClick={() => listApps()}
-                className="p-3 bg-[#1A1B1E] hover:bg-blue-600 hover:text-white border border-white/5 rounded-xl text-left text-xs transition-all group flex items-center justify-between"
-              >
-                <span>Gerenciar Aplicativos</span>
-                <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </button>
-              <button 
-                onClick={() => setIsIPModalOpen(true)}
-                className="p-3 bg-[#1A1B1E] hover:bg-blue-600 hover:text-white border border-white/5 rounded-xl text-left text-xs transition-all group flex items-center justify-between"
-              >
-                <span>Configurar Endereço IP</span>
-                <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-              </button>
+              
+              <div className="space-y-1.5 mt-1">
+                <label className="text-[9px] uppercase text-gray-600 font-mono ml-1">Gerenciamento GPO/Apps</label>
+                <select 
+                  className="w-full bg-[#1A1B1E] border border-white/5 rounded-xl px-4 py-3 text-xs outline-none focus:border-blue-500 transition-all font-medium appearance-none cursor-pointer"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'gpupdate') executeRemote('gpupdate /force');
+                    if (val === 'gpresult') executeRemote('gpresult /r');
+                    if (val === 'apps') listApps();
+                    if (val === 'ip') setIsIPModalOpen(true);
+                    e.target.value = "";
+                  }}
+                  defaultValue=""
+                >
+                  <option value="" disabled>Selecionar Ação...</option>
+                  <option value="gpupdate">Forçar GPUpdate</option>
+                  <option value="gpresult">Obter GPResult /r</option>
+                  <option value="apps">Gerenciar Aplicativos</option>
+                  <option value="ip">Configurar Endereço IP</option>
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-2 mt-2">
                 <button 
                   onClick={() => confirm('Reiniciar máquinas selecionadas?') && executeRemote('shutdown /r /t 0')}
@@ -710,6 +769,16 @@ const App = () => {
                       <div className="col-span-2 flex justify-center gap-3 text-gray-600">
                         <button 
                           onClick={() => {
+                            setEditingMachine({...m});
+                            setIsEditModalOpen(true);
+                          }}
+                          className="hover:text-blue-500 transition-colors"
+                          title="Editar Configurações"
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button 
+                          onClick={() => {
                             setScriptToRun(null);
                             setScriptTargetHosts([m.ip]);
                             setIsRunScriptModalOpen(true);
@@ -847,6 +916,55 @@ const App = () => {
                   </div>
                 </div>
 
+                <div className="bg-[#151619] border border-white/5 rounded-2xl p-6">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center border border-white/10">
+                      <Plus className="text-blue-500" size={20} />
+                    </div>
+                    <h3 className="font-bold">Unidades Organizacionais</h3>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        value={newOUName}
+                        onChange={e => setNewOUName(e.target.value)}
+                        className="flex-1 bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors"
+                        placeholder="Nome da nova OU"
+                      />
+                      <button 
+                        onClick={() => {
+                          if (newOUName && !ous.includes(newOUName)) {
+                            setOus([...ous, newOUName]);
+                            setNewOUName('');
+                          }
+                        }}
+                        className="px-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-2">
+                      {ous.map(ou => (
+                        <div key={ou} className="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                          <span className="text-sm">{ou}</span>
+                          {ou !== 'GERAL' && (
+                            <button 
+                              onClick={() => {
+                                setOus(ous.filter(o => o !== ou));
+                                setMachines(machines.map(m => m.ou === ou ? {...m, ou: 'GERAL'} : m));
+                              }}
+                              className="text-gray-500 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="bg-[#151619] border border-white/5 rounded-2xl p-6 flex flex-col justify-between">
                   <div>
                     <div className="flex items-center gap-3 mb-6">
@@ -874,7 +992,76 @@ const App = () => {
 
       {/* --- Modals --- */}
       
-      {/* Add Machine Modal */}
+      {/* Edit Machine Modal */}
+      <AnimatePresence>
+        {isEditModalOpen && editingMachine && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-[#151619] border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl"
+            >
+              <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+                <Pencil className="text-blue-500" /> Editar Host
+              </h3>
+              
+              <div className="space-y-6 mb-8">
+                <div>
+                  <label className="block text-[10px] uppercase text-gray-500 font-bold mb-2">Nome do Host</label>
+                  <input 
+                    type="text" 
+                    value={editingMachine.name}
+                    onChange={e => setEditingMachine({...editingMachine, name: e.target.value})}
+                    className="w-full bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors shadow-inner"
+                    placeholder="Ex: PC-SALA-01"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase text-gray-500 font-bold mb-2">Endereço IP</label>
+                  <input 
+                    type="text" 
+                    value={editingMachine.ip}
+                    onChange={e => setEditingMachine({...editingMachine, ip: e.target.value})}
+                    className="w-full bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 transition-colors shadow-inner"
+                    placeholder="Ex: 192.168.1.10"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase text-gray-500 font-bold mb-2">Unidade Organizacional</label>
+                  <select 
+                    value={editingMachine.ou}
+                    onChange={e => setEditingMachine({...editingMachine, ou: e.target.value})}
+                    className="w-full bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 appearance-none bg-no-repeat bg-[right_1rem_center]"
+                    style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundSize: '16px' }}
+                  >
+                    {ous.map(ou => (
+                      <option key={ou} value={ou}>{ou}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <button 
+                  type="button"
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="flex-1 py-4 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold rounded-2xl transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="button"
+                  onClick={handleUpdateMachine}
+                  className="flex-1 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-500/20"
+                >
+                  Salvar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {isAddModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
@@ -925,6 +1112,18 @@ const App = () => {
                     placeholder="ex: 192.168.1.15"
                     className="w-full bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500"
                   />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase text-gray-500 mb-1">Unidade Organizacional</label>
+                  <select 
+                    value={newMachine.ou}
+                    onChange={e => setNewMachine({...newMachine, ou: e.target.value})}
+                    className="w-full bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 appearance-none"
+                  >
+                    {ous.map(ou => (
+                      <option key={ou} value={ou}>{ou}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <div className="flex gap-3">
