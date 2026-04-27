@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Monitor, Settings, Plus, Trash2, Play, Activity, 
   Shield, Terminal, Cpu, CheckCircle, XCircle, RefreshCw,
-  LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash, Pencil
+  LogOut, ChevronRight, Globe, Lock, Key, ScrollText, FileCode, UploadCloud, Trash, Pencil, MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -129,6 +129,9 @@ const App = () => {
   const [scripts, setScripts] = useState<string[]>([]);
   const [scriptToRun, setScriptToRun] = useState<string | null>(null);
   const [scriptTargetHosts, setScriptTargetHosts] = useState<string[]>([]);
+  
+  const [isMessengerModalOpen, setIsMessengerModalOpen] = useState(false);
+  const [messengerText, setMessengerText] = useState('');
   
   const [terminalHost, setTerminalHost] = useState<string | null>(null);
   const [terminalLog, setTerminalLog] = useState<{ type: 'in' | 'out', text: string }[]>([]);
@@ -705,6 +708,21 @@ const App = () => {
                   Desligar
                 </button>
               </div>
+
+              <button 
+                onClick={() => {
+                  if (selectedHosts.length === 0) return alert('Selecione ao menos um host.');
+                  setIsMessengerModalOpen(true);
+                }}
+                className="w-full mt-2 p-3 bg-indigo-600/10 text-indigo-500 border border-indigo-600/20 rounded-xl text-left text-xs font-bold hover:bg-indigo-600 hover:text-white transition-all flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-2">
+                  <MessageSquare size={16} />
+                  <span>Messenger</span>
+                </div>
+                <Play size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+              </button>
+
               <button 
                 onClick={() => setIsExecModalOpen(true)}
                 className="p-3 bg-blue-600 text-white rounded-xl text-left text-xs font-bold mt-2 hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20"
@@ -1094,6 +1112,64 @@ const App = () => {
 
       {/* --- Modals --- */}
       
+      {/* Messenger Modal */}
+      <AnimatePresence>
+        {isMessengerModalOpen && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center px-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-[#151619] border border-white/10 rounded-3xl p-8 w-full max-w-md shadow-2xl"
+            >
+              <h3 className="text-xl font-bold mb-2 flex items-center gap-2">
+                <MessageSquare className="text-indigo-500" /> Messenger
+              </h3>
+              <p className="text-xs text-gray-500 mb-6 uppercase font-mono tracking-widest">Enviar mensagem para {selectedHosts.length} hosts</p>
+              
+              <div className="space-y-4 mb-8">
+                <div>
+                  <label className="block text-[10px] uppercase text-gray-500 font-bold mb-2">Mensagem para Exibir</label>
+                  <textarea 
+                    autoFocus
+                    value={messengerText}
+                    onChange={e => setMessengerText(e.target.value)}
+                    className="w-full h-32 bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors shadow-inner resize-none"
+                    placeholder="Digite sua mensagem que aparecerá na tela do usuário remoto..."
+                  />
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setIsMessengerModalOpen(false);
+                    setMessengerText('');
+                  }}
+                  className="flex-1 py-4 bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold rounded-2xl transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="button"
+                  disabled={!messengerText.trim()}
+                  onClick={async () => {
+                    const msg = messengerText.trim().replace(/"/g, "'");
+                    await executeRemote(`msg * "${msg}"`);
+                    setIsMessengerModalOpen(false);
+                    setMessengerText('');
+                  }}
+                  className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50"
+                >
+                  Enviar Agora
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Edit Machine Modal */}
       <AnimatePresence>
         {isEditModalOpen && editingMachine && (
